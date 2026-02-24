@@ -95,33 +95,23 @@ body {
   margin-bottom: 6px;
 }
 
-/* API Key Display (when already configured) */
-.api-key-display {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+/* Server Status */
+.server-status-text {
+  font-size: 12px;
+  font-weight: 500;
   padding: 7px 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--input-border);
   border-radius: 6px;
+  display: block;
 }
 
-.api-key-masked {
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-family: monospace;
-  letter-spacing: 0.02em;
+.server-connected {
+  color: #4ade80;
 }
 
-/* API Key Input Group */
-.api-key-input-group {
-  display: flex;
-  gap: 6px;
-}
-
-.api-key-input-group .input {
-  flex: 1;
-  min-width: 0;
+.server-disconnected {
+  color: var(--danger);
 }
 
 /* ===== Inputs ===== */
@@ -297,6 +287,66 @@ body {
 .footer-version {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* ===== Mode Toggle ===== */
+.mode-toggle {
+  display: flex;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.btn-mode {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.btn-mode:first-child {
+  border-right: 1px solid var(--input-border);
+}
+
+.btn-mode:hover {
+  background: var(--input-border);
+}
+
+.btn-mode.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ===== API Key Input ===== */
+.api-key-input-group {
+  display: flex;
+  gap: 6px;
+}
+
+.api-key-input-group .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.api-key-status {
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+  min-height: 16px;
+}
+
+.api-key-saved {
+  color: #4ade80;
+}
+
+.api-key-error {
+  color: var(--danger);
 }
 
 /* ===== Utility ===== */

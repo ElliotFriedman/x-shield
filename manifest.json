@@ -6,6 +6,7 @@
   "permissions": ["storage", "alarms", "tabs"],
   "host_permissions": [
     "https://x.com/*",
+    "http://127.0.0.1:7890/*",
     "https://api.anthropic.com/*"
   ],
   "background": {

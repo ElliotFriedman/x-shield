@@ -1,17 +1,23 @@
 /*
  * X-Shield Background Service Worker
- * Handles classification via Claude API, caching, time tracking,
+ * Handles classification via local server, caching, time tracking,
  * stats, and lockout enforcement.
  *
- * Design principle: FAIL CLOSED. If anything goes wrong (missing API key,
- * API errors, malformed responses), all tweets are filtered.
+ * Design principle: FAIL CLOSED. If anything goes wrong (server down,
+ * errors, malformed responses), all tweets are filtered.
  */
 
 'use strict';
 
 // -------------------------------------------------------------------
-// Classification System Prompt
+// Constants
 // -------------------------------------------------------------------
+const LOCAL_SERVER = 'http://127.0.0.1:7890';
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_MAX_ENTRIES = 500;
+const DEFAULT_TIME_LIMIT_SECONDS = 900; // 15 minutes
+const LOCKOUT_CLOSE_DELAY_MS = 3000;
+
 const CLASSIFICATION_SYSTEM_PROMPT = `You are X-Shield, a content filter that protects users from emotional manipulation on social media. Your job is to evaluate tweets and determine whether each one is healthy to see or designed to hijack emotions for engagement.
 
 ## Your Classification Task
@@ -29,19 +35,19 @@ Filter tweets whose PRIMARY PURPOSE is to provoke emotional reactions for engage
 - Manufactured urgency: "This needs to go viral", "SHARE BEFORE THEY DELETE THIS"
 - Outrage farming: cherry-picked examples designed to make you angry at a group
 
-### Subtle Manipulation (CRITICAL — catch these)
+### Subtle Manipulation (CRITICAL -- catch these)
 - "Just asking questions" that are actually loaded assertions designed to stoke outrage
-- Screenshots or quote-tweets of someone's bad take, posted to trigger a pile-on — the value isn't the information, it's the collective dunking
-- Moral superiority signaling: "I can't believe people actually think X" — the purpose is to feel righteous, not to persuade
+- Screenshots or quote-tweets of someone's bad take, posted to trigger a pile-on -- the value isn't the information, it's the collective dunking
+- Moral superiority signaling: "I can't believe people actually think X" -- the purpose is to feel righteous, not to persuade
 - Tribal framing: reducing complex, nuanced issues to us-vs-them narratives. If a tweet makes you feel like "my team" is good and "their team" is bad, it's manipulation
 - Selective framing: technically true facts arranged to provoke rather than inform. Real journalism contextualizes; manipulation cherry-picks
 - Doom amplification: presenting solvable problems as existential, irreversible catastrophes. The goal is despair and helpless scrolling, not action
 - Ratio/dunk culture: quote tweets or replies whose purpose is humiliation, not dialogue
 - Emotional bait disguised as questions: "Am I the only one who thinks...?", "Why is nobody talking about...?"
-- Performative outrage: the person posting isn't genuinely upset — they're performing outrage for their audience
+- Performative outrage: the person posting isn't genuinely upset -- they're performing outrage for their audience
 - Victimhood competition: framing everything through who's more oppressed/persecuted
 - Catastrophizing for engagement: "This is the END of X" / "X is DEAD" / hyperbolic declarations
-- Ragebait through comparison: "X got this but Y got that" — designed to trigger feelings of injustice
+- Ragebait through comparison: "X got this but Y got that" -- designed to trigger feelings of injustice
 - Concern trolling: pretending to care about something in order to attack it
 
 ## What to SHOW (keep visible)
@@ -49,7 +55,7 @@ Filter tweets whose PRIMARY PURPOSE is to provoke emotional reactions for engage
 The bar for showing is HIGH. Only show tweets that provide clear, positive value in one of these categories:
 
 **Enriching:** Content that makes you smarter, more informed, or more capable
-- Factual news reporting — negative news is fine IF presented to inform, not inflame
+- Factual news reporting -- negative news is fine IF presented to inform, not inflame
 - Scientific findings, research, data presented factually
 - Educational content, explainers, thoughtful analysis with nuance
 - Practical information: how-tos, professional insights, genuine recommendations
@@ -65,37 +71,29 @@ The bar for showing is HIGH. Only show tweets that provide clear, positive value
 
 **NOT sufficient to show (filter these even though they're "not bad"):**
 - Generic opinions that add no new insight
-- Low-effort humor, memes, shitposts (entertaining ≠ enriching)
-- Hot takes, even mild ones — if it's reactive commentary without depth, filter it
+- Low-effort humor, memes, shitposts (entertaining != enriching)
+- Hot takes, even mild ones -- if it's reactive commentary without depth, filter it
 - "Interesting" threads that are really just repackaged common knowledge for engagement
 - Self-promotion disguised as advice
 
 ## Key Principle: Intent Over Topic
 
 The same topic can be healthy or toxic depending on intent:
-- "New study shows microplastic levels in blood increased 50% since 2020 [link to paper]" → SHOW (factual, informative)
-- "They're POISONING us and nobody cares!!! 🤬" → FILTER (outrage farming, no actionable information)
-- "I disagree with this policy because [reasoned argument]" → SHOW (good faith debate)
-- "Anyone who supports this policy is literally insane" → FILTER (tribal, dehumanizing)
+- "New study shows microplastic levels in blood increased 50% since 2020 [link to paper]" -> SHOW (factual, informative)
+- "They're POISONING us and nobody cares!!!" -> FILTER (outrage farming, no actionable information)
+- "I disagree with this policy because [reasoned argument]" -> SHOW (good faith debate)
+- "Anyone who supports this policy is literally insane" -> FILTER (tribal, dehumanizing)
 
 ## When in Doubt: FILTER
 
 If you're unsure, lean toward FILTERING the tweet. The user has explicitly chosen to prioritize mental clarity over completeness. Missing a borderline tweet costs nothing. Letting manipulation through costs cognitive health.
 
-Only show tweets that are clearly enriching, educational, artistic, genuinely informative, or authentically connecting. If a tweet is borderline or you can't determine clear positive value, filter it. The bar is HIGH — this feed should feel like a curated library, not a town square.
+Only show tweets that are clearly enriching, educational, artistic, genuinely informative, or authentically connecting. If a tweet is borderline or you can't determine clear positive value, filter it. The bar is HIGH -- this feed should feel like a curated library, not a town square.
 
 ## Response Format
 
 Return ONLY valid JSON. No markdown, no explanation outside the JSON:
 [{"id": "tweet_0", "verdict": "show", "reason": "personal update about weekend project"}, ...]`;
-
-// -------------------------------------------------------------------
-// Constants
-// -------------------------------------------------------------------
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const CACHE_MAX_ENTRIES = 500;
-const DEFAULT_TIME_LIMIT_SECONDS = 900; // 15 minutes
-const LOCKOUT_CLOSE_DELAY_MS = 3000;
 
 // -------------------------------------------------------------------
 // Hashing utility — djb2 hash matching content.js
@@ -264,38 +262,124 @@ function filterAllVerdicts(tweets, reason) {
 // Claude API classification
 // -------------------------------------------------------------------
 async function classifyBatch(tweets) {
-  const { apiKey } = await chrome.storage.local.get('apiKey');
-
-  // No API key — fail closed
-  if (!apiKey) {
-    console.error('[X-Shield] No API key configured — filtering all tweets');
-    return filterAllVerdicts(tweets, 'no API key configured');
-  }
-
-  // Build the content array for the messages API
-  const contentArray = [];
-
-  for (let i = 0; i < tweets.length; i++) {
-    const tweet = tweets[i];
-    const label = `tweet_${i} (id: ${tweet.id})`;
-
-    // Add tweet text
-    contentArray.push({
-      type: 'text',
-      text: `--- ${label} ---\n${tweet.text || '[no text]'}`,
-    });
-
-  }
-
-  // If somehow the content array is empty, fail closed
-  if (contentArray.length === 0) {
-    return filterAllVerdicts(tweets, 'no content to classify');
-  }
-
   console.log(`[X-Shield] Classifying batch of ${tweets.length} tweets`);
 
+  // Build payload — plain tweet array for the local server
+  const payload = tweets.map((t) => ({ id: t.id, text: t.text }));
+
+  // Helper that attempts the server call, with one retry on failure
+  async function attemptServerCall() {
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let response;
+      try {
+        response = await fetch(`${LOCAL_SERVER}/classify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        console.error(`[X-Shield] Server request failed (attempt ${attempt}/${maxAttempts}):`, e);
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        return { error: 'server request failed' };
+      }
+
+      if (!response.ok) {
+        let errorBody = '';
+        try { errorBody = await response.text(); } catch (e) { /* ignore */ }
+        console.error('[X-Shield] Server returned status', response.status, errorBody);
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        return { error: `server error: ${response.status}` };
+      }
+
+      let body;
+      try {
+        body = await response.json();
+      } catch (e) {
+        console.error('[X-Shield] Failed to parse server response:', e);
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        return { error: 'malformed server response' };
+      }
+
+      return { body };
+    }
+  }
+
+  const serverResult = await attemptServerCall();
+  if (serverResult.error) {
+    return filterAllVerdicts(tweets, serverResult.error);
+  }
+  const body = serverResult.body;
+
+  // Server returns { verdicts: [...] } directly
+  const verdicts = body.verdicts;
+
+  if (!Array.isArray(verdicts)) {
+    console.error('[X-Shield] Verdicts is not an array:', verdicts);
+    return filterAllVerdicts(tweets, 'malformed verdict structure');
+  }
+
+  // Map the response verdicts (which use tweet_0, tweet_1, ...) back to
+  // the original tweet IDs. Also normalize verdict values.
+  const results = [];
+  for (let i = 0; i < tweets.length; i++) {
+    const tweet = tweets[i];
+    const hash = contentHash(tweet.text + (tweet.imageUrls || []).join(','));
+
+    // Find matching verdict from the server response
+    const serverVerdict = verdicts.find((v) => v.id === `tweet_${i}`);
+
+    let verdict;
+    let reason;
+
+    if (serverVerdict && serverVerdict.verdict === 'show') {
+      verdict = 'allow';
+      reason = serverVerdict.reason || 'approved';
+    } else if (serverVerdict) {
+      verdict = 'block';
+      reason = serverVerdict.reason || 'filtered';
+    } else {
+      // No matching verdict for this tweet — fail closed
+      verdict = 'block';
+      reason = 'no verdict returned — fail closed';
+    }
+
+    // Cache the result
+    await setCacheEntry(hash, verdict, reason);
+
+    results.push({
+      id: tweet.id,
+      verdict,
+      reason,
+      hash,
+    });
+  }
+
+  return results;
+}
+
+// -------------------------------------------------------------------
+// Direct Anthropic API classification (api mode)
+// -------------------------------------------------------------------
+async function classifyBatchAPI(tweets, apiKey) {
+  console.log(`[X-Shield] Classifying batch of ${tweets.length} tweets via Anthropic API`);
+
+  // Build the user prompt in the same format as the local server
+  const userPrompt = tweets.map((t, i) =>
+    `--- tweet_${i} (id: ${t.id}) ---\n${t.text || '[no text]'}`
+  ).join('\n\n');
+
   // Helper that attempts the API call, with one retry on failure
-  async function attemptApiCall() {
+  async function attemptAPICall() {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let response;
@@ -310,9 +394,9 @@ async function classifyBatch(tweets) {
           },
           body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 2048,
+            max_tokens: 4096,
             system: CLASSIFICATION_SYSTEM_PROMPT,
-            messages: [{ role: 'user', content: contentArray }],
+            messages: [{ role: 'user', content: userPrompt }],
           }),
         });
       } catch (e) {
@@ -351,67 +435,52 @@ async function classifyBatch(tweets) {
     }
   }
 
-  const apiResult = await attemptApiCall();
+  const apiResult = await attemptAPICall();
   if (apiResult.error) {
     return filterAllVerdicts(tweets, apiResult.error);
   }
   const body = apiResult.body;
 
-  // Extract the text content from the API response
-  let jsonText = '';
+  // Extract text from the response content blocks
+  let rawText = '';
   if (body.content && Array.isArray(body.content)) {
-    for (const block of body.content) {
-      if (block.type === 'text') {
-        jsonText += block.text;
-      }
-    }
+    rawText = body.content.map((block) => block.text || '').join('');
   }
 
-  if (!jsonText) {
-    console.error('[X-Shield] No text content in API response');
-    return filterAllVerdicts(tweets, 'empty API response');
-  }
+  // Strip markdown code fences if present
+  rawText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 
-  // Parse the JSON verdicts from the response
   let verdicts;
   try {
-    // Strip markdown code fences if present
-    let cleaned = jsonText.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?\s*```\s*$/, '');
-    }
-    verdicts = JSON.parse(cleaned);
+    verdicts = JSON.parse(rawText);
   } catch (e) {
-    console.error('[X-Shield] Failed to parse verdicts JSON:', e, jsonText);
-    return filterAllVerdicts(tweets, 'malformed verdict JSON');
+    console.error('[X-Shield] Failed to parse verdicts from API response:', e, rawText);
+    return filterAllVerdicts(tweets, 'malformed verdict JSON from API');
   }
 
   if (!Array.isArray(verdicts)) {
     console.error('[X-Shield] Verdicts is not an array:', verdicts);
-    return filterAllVerdicts(tweets, 'malformed verdict structure');
+    return filterAllVerdicts(tweets, 'malformed verdict structure from API');
   }
 
-  // Map the response verdicts (which use tweet_0, tweet_1, ...) back to
-  // the original tweet IDs. Also normalize verdict values.
+  // Map the response verdicts back to the original tweet IDs and normalize
   const results = [];
   for (let i = 0; i < tweets.length; i++) {
     const tweet = tweets[i];
     const hash = contentHash(tweet.text + (tweet.imageUrls || []).join(','));
 
-    // Find matching verdict from the API response
-    const apiVerdict = verdicts.find((v) => v.id === `tweet_${i}`);
+    const serverVerdict = verdicts.find((v) => v.id === `tweet_${i}`);
 
     let verdict;
     let reason;
 
-    if (apiVerdict && apiVerdict.verdict === 'show') {
+    if (serverVerdict && serverVerdict.verdict === 'show') {
       verdict = 'allow';
-      reason = apiVerdict.reason || 'approved';
-    } else if (apiVerdict) {
+      reason = serverVerdict.reason || 'approved';
+    } else if (serverVerdict) {
       verdict = 'block';
-      reason = apiVerdict.reason || 'filtered';
+      reason = serverVerdict.reason || 'filtered';
     } else {
-      // No matching verdict for this tweet — fail closed
       verdict = 'block';
       reason = 'no verdict returned — fail closed';
     }
@@ -478,8 +547,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'CHECK_API_KEY': {
-          const { apiKey } = await chrome.storage.local.get('apiKey');
-          sendResponse({ hasKey: Boolean(apiKey) });
+          const { settings, apiKey } = await chrome.storage.local.get(['settings', 'apiKey']);
+          const mode = (settings && settings.classificationMode) || 'local';
+          if (mode === 'api') {
+            sendResponse({ hasKey: !!(apiKey && apiKey.trim()), mode: 'api' });
+          } else {
+            try {
+              const healthCheck = await fetch(`${LOCAL_SERVER}/health`);
+              sendResponse({ hasKey: healthCheck.ok, mode: 'local' });
+            } catch (e) {
+              sendResponse({ hasKey: false, mode: 'local' });
+            }
+          }
           break;
         }
 
@@ -544,7 +623,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // Classify any uncached tweets via API
           let apiResults = [];
           if (uncached.length > 0) {
-            apiResults = await classifyBatch(uncached);
+            const { settings: classifySettings, apiKey: classifyApiKey } = await chrome.storage.local.get(['settings', 'apiKey']);
+            const classifyMode = (classifySettings && classifySettings.classificationMode) || 'local';
+            if (classifyMode === 'api' && classifyApiKey && classifyApiKey.trim()) {
+              apiResults = await classifyBatchAPI(uncached, classifyApiKey.trim());
+            } else {
+              apiResults = await classifyBatch(uncached);
+            }
           }
 
           const allVerdicts = [...cachedResults, ...apiResults];
@@ -586,6 +671,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             dailyStats: { date: today, filtered: 0, shown: 0, analyzed: 0 },
           });
           sendResponse({ success: true });
+          break;
+        }
+
+        case 'SET_API_KEY': {
+          const key = (message.key || '').trim();
+          await chrome.storage.local.set({ apiKey: key });
+          sendResponse({ success: true });
+          break;
+        }
+
+        case 'SET_MODE': {
+          const newMode = message.mode === 'api' ? 'api' : 'local';
+          const { settings: modeSettings } = await chrome.storage.local.get('settings');
+          const updated = modeSettings || {};
+          updated.classificationMode = newMode;
+          await chrome.storage.local.set({ settings: updated });
+          // Notify all x.com tabs so they can update overlay
+          const tabs = await chrome.tabs.query({ url: 'https://x.com/*' });
+          for (const tab of tabs) {
+            try {
+              await chrome.tabs.sendMessage(tab.id, { type: 'MODE_CHANGED', mode: newMode });
+            } catch (e) { /* content script may not be loaded */ }
+          }
+          sendResponse({ success: true, mode: newMode });
           break;
         }
 

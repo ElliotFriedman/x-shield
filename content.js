@@ -74,19 +74,34 @@
     if (msg && msg.type === 'LOCKOUT') {
       redirectToBlocked();
     }
+    if (msg && msg.type === 'MODE_CHANGED') {
+      removeApiKeyOverlay();
+      (async () => {
+        const resp = await sendMessage({ type: 'CHECK_API_KEY' });
+        if (!resp || !resp.hasKey) {
+          showApiKeyOverlay((resp && resp.mode) || 'local');
+        }
+      })();
+    }
   });
 
   // ---------------------------------------------------------------
-  // API key missing overlay — fail closed, hide all tweets
+  // Server unavailable overlay — fail closed, hide all tweets
   // ---------------------------------------------------------------
-  function showApiKeyOverlay() {
+  function showApiKeyOverlay(mode) {
     // Avoid duplicates
     if (document.querySelector('.x-shield-overlay')) return;
 
     const overlay = document.createElement('div');
     overlay.className = 'x-shield-overlay';
-    overlay.textContent =
-      'X-Shield: Configure your API key in the extension popup to use X.';
+
+    if (mode === 'api') {
+      overlay.textContent =
+        'X-Shield: Set your Anthropic API key in the extension popup to use X.';
+    } else {
+      overlay.textContent =
+        'X-Shield: Start the local server (node server.js) to use X.';
+    }
     document.body.appendChild(overlay);
 
     // Also hide any tweets already on the page
@@ -401,19 +416,20 @@
     // 2. Check API key
     const apiKeyResponse = await sendMessage({ type: 'CHECK_API_KEY' });
     if (!apiKeyResponse || !apiKeyResponse.hasKey) {
-      showApiKeyOverlay();
+      const mode = (apiKeyResponse && apiKeyResponse.mode) || 'local';
+      showApiKeyOverlay(mode);
 
-      // Listen for future messages from background in case key is set later
-      chrome.runtime.onMessage.addListener((msg) => {
-        if (msg.type === 'API_KEY_SET') {
+      // Poll for server availability — retry every 5 seconds
+      const serverRetryInterval = setInterval(async () => {
+        const resp = await sendMessage({ type: 'CHECK_API_KEY' });
+        if (resp && resp.hasKey) {
+          clearInterval(serverRetryInterval);
           removeApiKeyOverlay();
-          // Set up the full pipeline now that we have an API key
           setupNavigationWatcher();
           setupObserver();
-          // Process any tweets already on the page
           scanForTweets(document.body);
         }
-      });
+      }, 5000);
 
       // Don't proceed with observer setup — fail closed
       // Still start heartbeat so lockout can kick in

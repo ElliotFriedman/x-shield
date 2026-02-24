@@ -1,11 +1,13 @@
 // ===== DOM Elements =====
 const els = {
-  apiKeyDisplay: document.getElementById('api-key-display'),
-  apiKeyInputGroup: document.getElementById('api-key-input-group'),
-  apiKeyMasked: document.querySelector('.api-key-masked'),
+  btnModeLocal: document.getElementById('btn-mode-local'),
+  btnModeApi: document.getElementById('btn-mode-api'),
+  modeLocalSettings: document.getElementById('mode-local-settings'),
+  modeApiSettings: document.getElementById('mode-api-settings'),
+  serverStatusText: document.getElementById('server-status-text'),
   inputApiKey: document.getElementById('input-api-key'),
-  btnSaveKey: document.getElementById('btn-save-key'),
-  btnChangeKey: document.getElementById('btn-change-key'),
+  btnSaveApiKey: document.getElementById('btn-save-api-key'),
+  apiKeyStatus: document.getElementById('api-key-status'),
   inputTimeLimit: document.getElementById('input-time-limit'),
   timeUsedText: document.getElementById('time-used-text'),
   progressBar: document.getElementById('progress-bar'),
@@ -17,6 +19,7 @@ const els = {
 };
 
 let refreshInterval = null;
+let currentMode = 'local';
 
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', () => {
@@ -26,47 +29,93 @@ document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
 });
 
+// ===== Mode Switching =====
+function updateModeUI(mode) {
+  currentMode = mode;
+
+  if (mode === 'api') {
+    els.btnModeApi.classList.add('active');
+    els.btnModeLocal.classList.remove('active');
+    els.modeLocalSettings.classList.add('hidden');
+    els.modeApiSettings.classList.remove('hidden');
+  } else {
+    els.btnModeLocal.classList.add('active');
+    els.btnModeApi.classList.remove('active');
+    els.modeLocalSettings.classList.remove('hidden');
+    els.modeApiSettings.classList.add('hidden');
+  }
+}
+
+function switchMode(mode) {
+  chrome.runtime.sendMessage({ type: 'SET_MODE', mode }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.success) {
+      updateModeUI(response.mode);
+      if (response.mode === 'local') {
+        checkServerStatus();
+      }
+    }
+  });
+}
+
+// ===== API Key =====
+function saveApiKey() {
+  const key = els.inputApiKey.value.trim();
+  if (!key) return;
+
+  chrome.runtime.sendMessage({ type: 'SET_API_KEY', key }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.success) {
+      els.inputApiKey.value = '';
+      els.inputApiKey.placeholder = 'sk-ant-****' + key.slice(-4);
+      els.apiKeyStatus.textContent = 'Key saved';
+      els.apiKeyStatus.classList.remove('api-key-error');
+      els.apiKeyStatus.classList.add('api-key-saved');
+      setTimeout(() => { els.apiKeyStatus.textContent = ''; }, 2000);
+    }
+  });
+}
+
+// ===== Server Status =====
+function checkServerStatus() {
+  fetch('http://127.0.0.1:7890/health')
+    .then((res) => {
+      if (res.ok) {
+        els.serverStatusText.textContent = 'Local server: connected';
+        els.serverStatusText.classList.remove('server-disconnected');
+        els.serverStatusText.classList.add('server-connected');
+      } else {
+        els.serverStatusText.textContent = 'Local server: error';
+        els.serverStatusText.classList.remove('server-connected');
+        els.serverStatusText.classList.add('server-disconnected');
+      }
+    })
+    .catch(() => {
+      els.serverStatusText.textContent = 'Local server: disconnected';
+      els.serverStatusText.classList.remove('server-connected');
+      els.serverStatusText.classList.add('server-disconnected');
+    });
+}
+
 // ===== Settings =====
 function loadSettings() {
-  chrome.storage.local.get(['apiKey', 'settings'], (result) => {
-    // API Key
-    if (result.apiKey) {
-      showApiKeyConfigured();
-    } else {
-      showApiKeyInput();
-    }
+  checkServerStatus();
 
-    // Time limit — stored as settings.timeLimitSeconds in seconds, display as minutes
+  chrome.storage.local.get(['settings', 'apiKey'], (result) => {
+    // Time limit
     const timeLimitMinutes = (result.settings && typeof result.settings.timeLimitSeconds === 'number')
       ? result.settings.timeLimitSeconds / 60
       : 15;
     els.inputTimeLimit.value = timeLimitMinutes;
-  });
-}
 
-function showApiKeyConfigured() {
-  els.apiKeyDisplay.classList.remove('hidden');
-  els.apiKeyInputGroup.classList.add('hidden');
-}
+    // Mode
+    const mode = (result.settings && result.settings.classificationMode) || 'local';
+    updateModeUI(mode);
 
-function showApiKeyInput() {
-  els.apiKeyDisplay.classList.add('hidden');
-  els.apiKeyInputGroup.classList.remove('hidden');
-  els.inputApiKey.value = '';
-}
-
-function saveApiKey() {
-  const apiKey = els.inputApiKey.value.trim();
-  if (!apiKey) return;
-
-  chrome.storage.local.set({ apiKey }, () => {
-    showApiKeyConfigured();
-    // Notify any open x.com tabs so they can remove the API key overlay
-    chrome.tabs.query({ url: 'https://x.com/*' }, (tabs) => {
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, { type: 'API_KEY_SET' }).catch(() => {});
-      }
-    });
+    // API key — show masked placeholder if key exists
+    if (result.apiKey && result.apiKey.trim()) {
+      els.inputApiKey.placeholder = 'sk-ant-****' + result.apiKey.slice(-4);
+    }
   });
 }
 
@@ -76,7 +125,6 @@ function saveTimeLimit() {
   if (value > 1440) value = 1440;
   els.inputTimeLimit.value = value;
 
-  // Merge into existing settings to avoid clobbering other settings keys
   chrome.storage.local.get('settings', (result) => {
     const settings = result.settings || {};
     settings.timeLimitSeconds = value * 60;
@@ -98,18 +146,14 @@ function loadStats() {
 }
 
 function updateDisplay(stats) {
-  // background.js sends timeUsed and timeLimit in seconds — convert to minutes for display
   const timeUsedMinutes = (stats.timeUsed || 0) / 60;
   const timeLimitMinutes = (stats.timeLimit || 900) / 60;
   const pct = timeLimitMinutes > 0 ? Math.min((timeUsedMinutes / timeLimitMinutes) * 100, 100) : 0;
 
-  // Time text
   els.timeUsedText.textContent = `${Math.round(timeUsedMinutes * 10) / 10} / ${timeLimitMinutes} minutes`;
 
-  // Progress bar width
   els.progressBar.style.width = `${pct}%`;
 
-  // Progress bar color
   els.progressBar.classList.remove('amber', 'red');
   if (pct >= 100) {
     els.progressBar.classList.add('red');
@@ -117,7 +161,6 @@ function updateDisplay(stats) {
     els.progressBar.classList.add('amber');
   }
 
-  // Stats
   const analyzed = stats.analyzed || 0;
   const filtered = stats.filtered || 0;
   const shown = stats.shown || 0;
@@ -126,7 +169,6 @@ function updateDisplay(stats) {
   els.statFiltered.textContent = filtered;
   els.statShown.textContent = shown;
 
-  // Filtered percentage
   if (analyzed > 0) {
     const filteredPct = ((filtered / analyzed) * 100).toFixed(1);
     els.filteredPct.textContent = `${filtered} of ${analyzed} tweets filtered (${filteredPct}%)`;
@@ -143,10 +185,14 @@ function resetStats() {
 
 // ===== Auto-Refresh =====
 function startAutoRefresh() {
-  refreshInterval = setInterval(loadStats, 5000);
+  refreshInterval = setInterval(() => {
+    loadStats();
+    if (currentMode === 'local') {
+      checkServerStatus();
+    }
+  }, 5000);
 }
 
-// Clean up on popup close
 window.addEventListener('unload', () => {
   if (refreshInterval) {
     clearInterval(refreshInterval);
@@ -156,15 +202,12 @@ window.addEventListener('unload', () => {
 
 // ===== Event Bindings =====
 function bindEvents() {
-  els.btnSaveKey.addEventListener('click', saveApiKey);
-
+  els.btnModeLocal.addEventListener('click', () => switchMode('local'));
+  els.btnModeApi.addEventListener('click', () => switchMode('api'));
+  els.btnSaveApiKey.addEventListener('click', saveApiKey);
   els.inputApiKey.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveApiKey();
   });
-
-  els.btnChangeKey.addEventListener('click', showApiKeyInput);
-
   els.inputTimeLimit.addEventListener('change', saveTimeLimit);
-
   els.btnResetStats.addEventListener('click', resetStats);
 }
