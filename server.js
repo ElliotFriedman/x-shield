@@ -92,8 +92,11 @@ Return ONLY valid JSON. No markdown, no explanation outside the JSON:
 // -------------------------------------------------------------------
 function classifyWithClaude(userPrompt) {
   return new Promise((resolve, reject) => {
+    // Use -p with no positional arg — prompt is piped via stdin.
+    // Passing tweet text as a CLI argument fails when it starts
+    // with dashes (CLI parser interprets "--- tweet_0 ..." as a flag).
     const args = [
-      '-p', userPrompt,
+      '-p',
       '--system-prompt', CLASSIFICATION_SYSTEM_PROMPT,
       '--output-format', 'json',
       '--model', 'sonnet',
@@ -105,6 +108,10 @@ function classifyWithClaude(userPrompt) {
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 60000,
     });
+
+    // Pipe user prompt via stdin
+    proc.stdin.write(userPrompt);
+    proc.stdin.end();
 
     let stdout = '';
     let stderr = '';
