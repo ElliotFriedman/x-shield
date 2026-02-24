@@ -1,0 +1,88 @@
+/*
+ * X-Shield — injected into x.com pages
+ * Hides distracting UI and controls tweet visibility during AI filtering.
+ */
+
+/* -------------------------------------------------------
+   1. Hide trending sidebar
+   ------------------------------------------------------- */
+[data-testid="sidebarColumn"] {
+  display: none !important;
+}
+
+/* -------------------------------------------------------
+   2. Hide "What's happening" and "Who to follow" sections
+   These appear as timeline modules inside the feed with
+   specific data-testid attributes.
+   ------------------------------------------------------- */
+[aria-label="Timeline: Trending now"],
+[aria-label="Timeline: Who to follow"],
+[aria-label="Who to follow"],
+[data-testid="trend"],
+[data-testid="placementTracking"],
+a[href="/explore/tabs/trending"],
+a[href="/i/connect_people"] {
+  display: none !important;
+}
+
+/* -------------------------------------------------------
+   3. Pending tweets — awaiting AI classification
+   visibility: hidden keeps the element in the layout so
+   scroll position is preserved; height: auto is the default
+   but stated explicitly for clarity.
+   ------------------------------------------------------- */
+.x-shield-pending {
+  visibility: hidden !important;
+  height: auto !important;
+}
+
+/* -------------------------------------------------------
+   4. Approved tweets — passed AI filter
+   Fade in with a subtle opacity transition.
+   ------------------------------------------------------- */
+.x-shield-approved {
+  visibility: visible !important;
+  animation: x-shield-fade-in 0.3s ease-out;
+}
+
+@keyframes x-shield-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* -------------------------------------------------------
+   5. Filtered tweets — removed by AI classification
+   ------------------------------------------------------- */
+.x-shield-filtered {
+  display: none !important;
+}
+
+/* -------------------------------------------------------
+   5b. Unclassified tweets — classification failed, shown with warning border
+   ------------------------------------------------------- */
+.x-shield-unclassified {
+  visibility: visible !important;
+  border-left: 3px solid #d4a84b !important;
+  opacity: 0.85;
+}
+
+/* -------------------------------------------------------
+   6. "Configure API key" overlay
+   Covers the main feed area with a semi-opaque backdrop
+   and centered instructional text.
+   ------------------------------------------------------- */
+.x-shield-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  text-align: center;
+  padding: 24px;
+  line-height: 1.5;
+}
