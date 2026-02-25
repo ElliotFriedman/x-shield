@@ -349,6 +349,15 @@ body {
   color: var(--danger);
 }
 
+/* ===== Stat Colors ===== */
+.stat-nourished {
+  color: #4ade80;
+}
+
+.stat-distilled {
+  color: #7c6bbd;
+}
+
 /* ===== Utility ===== */
 .hidden {
   display: none !important;

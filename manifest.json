@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X-Shield",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "AI-powered social media filtration. Removes rage bait, hides trending, enforces time limits.",
   "permissions": ["storage", "alarms", "tabs"],
   "host_permissions": [

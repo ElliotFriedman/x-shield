@@ -14,6 +14,8 @@ const els = {
   statAnalyzed: document.getElementById('stat-analyzed'),
   statFiltered: document.getElementById('stat-filtered'),
   statShown: document.getElementById('stat-shown'),
+  statNourished: document.getElementById('stat-nourished'),
+  statDistilled: document.getElementById('stat-distilled'),
   filteredPct: document.getElementById('filtered-pct'),
   btnResetStats: document.getElementById('btn-reset-stats'),
 };
@@ -138,10 +140,10 @@ function saveTimeLimit() {
 function loadStats() {
   chrome.runtime.sendMessage({ type: 'GET_STATS' }, (response) => {
     if (chrome.runtime.lastError) {
-      updateDisplay({ timeUsed: 0, timeLimit: 900, analyzed: 0, filtered: 0, shown: 0 });
+      updateDisplay({ timeUsed: 0, timeLimit: 900, analyzed: 0, filtered: 0, shown: 0, nourished: 0, distilled: 0 });
       return;
     }
-    updateDisplay(response || { timeUsed: 0, timeLimit: 900, analyzed: 0, filtered: 0, shown: 0 });
+    updateDisplay(response || { timeUsed: 0, timeLimit: 900, analyzed: 0, filtered: 0, shown: 0, nourished: 0, distilled: 0 });
   });
 }
 
@@ -164,10 +166,14 @@ function updateDisplay(stats) {
   const analyzed = stats.analyzed || 0;
   const filtered = stats.filtered || 0;
   const shown = stats.shown || 0;
+  const nourished = stats.nourished || 0;
+  const distilled = stats.distilled || 0;
 
   els.statAnalyzed.textContent = analyzed;
   els.statFiltered.textContent = filtered;
   els.statShown.textContent = shown;
+  els.statNourished.textContent = nourished;
+  els.statDistilled.textContent = distilled;
 
   if (analyzed > 0) {
     const filteredPct = ((filtered / analyzed) * 100).toFixed(1);

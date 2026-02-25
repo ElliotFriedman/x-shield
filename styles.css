@@ -56,6 +56,17 @@ a[href="/i/connect_people"] {
 }
 
 /* -------------------------------------------------------
+   4b. Nourished tweets — promoted beneficial content
+   Green left border indicates actively nourishing content.
+   ------------------------------------------------------- */
+.x-shield-nourished {
+  visibility: visible !important;
+  border-left: 3px solid #4ade80 !important;
+  animation: x-shield-fade-in 0.3s ease-out;
+}
+
+
+/* -------------------------------------------------------
    5. Filtered tweets — removed by AI classification
    ------------------------------------------------------- */
 .x-shield-filtered {
@@ -63,7 +74,26 @@ a[href="/i/connect_people"] {
 }
 
 /* -------------------------------------------------------
-   5b. Unclassified tweets — classification failed, shown with warning border
+   5b. Distilled tweets — rewritten by AI to remove manipulation
+   Subtle left border to indicate the text has been cleaned up.
+   ------------------------------------------------------- */
+.x-shield-distilled {
+  visibility: visible !important;
+  border-left: 3px solid #7c6bbd !important;
+  animation: x-shield-fade-in 0.3s ease-out;
+}
+
+.x-shield-distilled-label {
+  display: block;
+  font-size: 11px;
+  color: #7c6bbd;
+  margin-top: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+/* -------------------------------------------------------
+   5c. Unclassified tweets — classification failed, shown with warning border
    ------------------------------------------------------- */
 .x-shield-unclassified {
   visibility: visible !important;
@@ -90,4 +120,19 @@ a[href="/i/connect_people"] {
   text-align: center;
   padding: 24px;
   line-height: 1.5;
+}
+
+/* -------------------------------------------------------
+   7. Notification badge suppression
+   Hides the blue notification count badge on the bell icon
+   to break the variable-ratio reinforcement loop. Users
+   can still click Notifications — we just remove the
+   Pavlovian dot that triggers compulsive checking.
+   DMs badge is left alone (interpersonal communication).
+   ------------------------------------------------------- */
+a[href="/notifications"] [aria-live="polite"],
+a[data-testid="AppTabBar_Notifications_Link"] [aria-live="polite"],
+a[href="/notifications"] > div > div:not(:first-child),
+a[data-testid="AppTabBar_Notifications_Link"] > div > div:not(:first-child) {
+  display: none !important;
 }
