@@ -18,6 +18,8 @@
   const HEARTBEAT_INTERVAL_MS = 10000;
   const SPA_POLL_INTERVAL_MS = 1000;
 
+  const VERDICT_PRIORITY = { nourish: 0, allow: 1, distill: 2, block: 3, pending: 4 };
+
   // ---------------------------------------------------------------
   // State
   // ---------------------------------------------------------------
@@ -26,6 +28,8 @@
   let batchQueue = [];                  // { id, text, element }
   let batchTimer = null;
   let lastUrl = location.href;
+  let observer = null;
+  let observerPaused = false;
 
   // ---------------------------------------------------------------
   // Content hash — simple djb2-style hash returning a hex string
@@ -117,7 +121,9 @@
     const tweets = document.querySelectorAll('article[data-testid="tweet"]');
     tweets.forEach((tweet) => {
       if (!tweet.classList.contains('x-shield-approved') &&
-          !tweet.classList.contains('x-shield-filtered')) {
+          !tweet.classList.contains('x-shield-filtered') &&
+          !tweet.classList.contains('x-shield-distilled') &&
+          !tweet.classList.contains('x-shield-nourished')) {
         tweet.classList.add('x-shield-pending');
       }
     });
@@ -173,17 +179,43 @@
   // ---------------------------------------------------------------
   // Apply verdict to a tweet element
   // ---------------------------------------------------------------
-  function applyVerdict(element, verdict) {
+  function applyVerdict(element, verdict, distilled) {
     element.classList.remove('x-shield-pending');
 
-    if (verdict === 'allow') {
+    if (verdict === 'nourish') {
+      element.classList.add('x-shield-nourished');
+      element.classList.remove('x-shield-filtered', 'x-shield-approved', 'x-shield-distilled');
+    } else if (verdict === 'distill' && distilled) {
+      element.classList.add('x-shield-distilled');
+      element.classList.remove('x-shield-filtered', 'x-shield-approved', 'x-shield-nourished');
+      applyDistilledText(element, distilled);
+    } else if (verdict === 'allow') {
       element.classList.add('x-shield-approved');
-      element.classList.remove('x-shield-filtered');
+      element.classList.remove('x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished');
     } else {
       // Any non-"allow" verdict (including "block", undefined, null,
       // malformed) results in filtering — fail closed
       element.classList.add('x-shield-filtered');
-      element.classList.remove('x-shield-approved');
+      element.classList.remove('x-shield-approved', 'x-shield-distilled', 'x-shield-nourished');
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Replace tweet text with distilled version
+  // ---------------------------------------------------------------
+  function applyDistilledText(article, distilledText) {
+    const textEl = article.querySelector('[data-testid="tweetText"]');
+    if (!textEl) return;
+
+    // Replace text content, preserving the element
+    textEl.textContent = distilledText;
+
+    // Add a subtle label if not already present
+    if (!article.querySelector('.x-shield-distilled-label')) {
+      const label = document.createElement('span');
+      label.className = 'x-shield-distilled-label';
+      label.textContent = 'distilled by X-Shield';
+      textEl.parentNode.insertBefore(label, textEl.nextSibling);
     }
   }
 
@@ -236,14 +268,17 @@
     // If response is null or malformed, mark tweets as unclassified so they
     // become visible with a warning indicator instead of staying hidden forever.
     if (!response || !response.verdicts || !Array.isArray(response.verdicts)) {
-      for (const [, el] of batchElements) {
+      for (const [id, el] of batchElements) {
         el.classList.remove('x-shield-pending');
         el.classList.add('x-shield-unclassified');
+        elementMap.delete(id);
       }
       return;
     }
 
     // Apply verdicts
+    const batchVerdictInfo = new Map();
+
     response.verdicts.forEach((v) => {
       if (!v || typeof v.id === 'undefined' || typeof v.verdict === 'undefined') {
         // Malformed entry — skip, tweet stays hidden (fail closed)
@@ -253,11 +288,14 @@
       const element = batchElements.get(v.id) || elementMap.get(v.id);
       if (!element) return;
 
-      applyVerdict(element, v.verdict);
+      applyVerdict(element, v.verdict, v.distilled);
+
+      // Track for reordering
+      batchVerdictInfo.set(v.id, { element, verdict: v.verdict });
 
       // Cache the verdict by content hash if we have one
       if (v.hash) {
-        verdictCache.set(v.hash, v.verdict);
+        verdictCache.set(v.hash, { verdict: v.verdict, distilled: v.distilled });
       }
 
       // Clean up element references to prevent memory leak
@@ -265,11 +303,108 @@
       elementMap.delete(v.id);
     });
 
+    // Update feed reordering setting and reorder this batch by verdict priority
+    feedReorderingEnabled = response.feedReorderingEnabled !== false;
+    reorderBatch(batchVerdictInfo);
+
     // For any tweets in the batch that did NOT receive a verdict,
     // they stay hidden (fail closed) — clean up references anyway
     for (const id of batchElements.keys()) {
       elementMap.delete(id);
     }
+  }
+
+  // ---------------------------------------------------------------
+  // Feed reordering — sort tweets within each batch by verdict priority
+  // ---------------------------------------------------------------
+
+  // Track whether feed reordering is enabled (loaded from settings)
+  let feedReorderingEnabled = true;
+
+  function isOnFeedPage() {
+    const path = location.pathname;
+    return path === '/' || path === '/home';
+  }
+
+  function getCellWrapper(article) {
+    // Walk up from the article to find the cellInnerDiv wrapper
+    // X.com structure: div[data-testid="cellInnerDiv"] > ... > article
+    return article.closest('[data-testid="cellInnerDiv"]');
+  }
+
+  function reorderBatch(batchElements) {
+    if (!feedReorderingEnabled || !isOnFeedPage()) return;
+
+    // Collect cellInnerDiv wrappers with their verdict priorities
+    const entries = [];
+    for (const [id, info] of batchElements) {
+      const cell = getCellWrapper(info.element);
+      if (!cell) continue;
+
+      // Only reorder cells that contain tweet articles (skip ads, "who to follow", etc.)
+      if (!cell.querySelector('article[data-testid="tweet"]')) continue;
+
+      const priority = VERDICT_PRIORITY[info.verdict] ?? VERDICT_PRIORITY.pending;
+      entries.push({ cell, priority, id });
+    }
+
+    if (entries.length < 2) return;
+
+    // All cells must share the same parent for reordering to work
+    const parent = entries[0].cell.parentElement;
+    if (!parent) return;
+    const allSameParent = entries.every(e => e.cell.parentElement === parent);
+    if (!allSameParent) return;
+
+    // Sort by priority (lower = higher priority = appears first)
+    entries.sort((a, b) => a.priority - b.priority);
+
+    // Snapshot children once to avoid repeated Array.from + indexOf
+    const children = Array.from(parent.children);
+
+    // Check if already in order — skip DOM manipulation if so
+    const currentOrder = entries.map(e => children.indexOf(e.cell));
+    const isSorted = currentOrder.every((val, i) => i === 0 || val >= currentOrder[i - 1]);
+    if (isSorted) return;
+
+    // Preserve scroll position
+    const firstVisible = entries.find(e => {
+      const rect = e.cell.getBoundingClientRect();
+      return rect.top >= 0 && rect.top < window.innerHeight;
+    });
+    const firstVisibleTop = firstVisible ? firstVisible.cell.getBoundingClientRect().top : null;
+
+    // Pause MutationObserver during reorder
+    pauseObserver();
+
+    // Reorder: insert each cell before the next sibling of the previous one
+    // Find the earliest position among our entries
+    let referenceNode = null;
+    let earliestIndex = Infinity;
+    for (const entry of entries) {
+      const idx = children.indexOf(entry.cell);
+      if (idx < earliestIndex) {
+        earliestIndex = idx;
+        referenceNode = parent.children[idx];
+      }
+    }
+
+    // Insert all entries starting at the earliest position
+    for (const entry of entries) {
+      parent.insertBefore(entry.cell, referenceNode);
+      referenceNode = entry.cell.nextSibling;
+    }
+
+    // Restore scroll position
+    if (firstVisible && firstVisibleTop !== null) {
+      const newTop = firstVisible.cell.getBoundingClientRect().top;
+      const drift = newTop - firstVisibleTop;
+      if (Math.abs(drift) > 1) {
+        window.scrollBy(0, drift);
+      }
+    }
+
+    resumeObserver();
   }
 
   // ---------------------------------------------------------------
@@ -280,6 +415,8 @@
     if (article.classList.contains('x-shield-pending') ||
         article.classList.contains('x-shield-approved') ||
         article.classList.contains('x-shield-filtered') ||
+        article.classList.contains('x-shield-distilled') ||
+        article.classList.contains('x-shield-nourished') ||
         article.classList.contains('x-shield-unclassified')) {
       return;
     }
@@ -293,7 +430,8 @@
 
     // Step 3: check local verdict cache
     if (verdictCache.has(hash)) {
-      applyVerdict(article, verdictCache.get(hash));
+      const cached = verdictCache.get(hash);
+      applyVerdict(article, cached.verdict, cached.distilled);
       return;
     }
 
@@ -328,7 +466,8 @@
   // MutationObserver setup
   // ---------------------------------------------------------------
   function setupObserver() {
-    const observer = new MutationObserver((mutations) => {
+    observer = new MutationObserver((mutations) => {
+      if (observerPaused) return;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
@@ -343,6 +482,17 @@
     });
 
     return observer;
+  }
+
+  function pauseObserver() {
+    observerPaused = true;
+  }
+
+  function resumeObserver() {
+    // Use microtask to resume after current DOM mutations are processed
+    queueMicrotask(() => {
+      observerPaused = false;
+    });
   }
 
   // ---------------------------------------------------------------
@@ -382,10 +532,15 @@
           'article[data-testid="tweet"].x-shield-pending,' +
           'article[data-testid="tweet"].x-shield-approved,' +
           'article[data-testid="tweet"].x-shield-filtered,' +
+          'article[data-testid="tweet"].x-shield-distilled,' +
+          'article[data-testid="tweet"].x-shield-nourished,' +
           'article[data-testid="tweet"].x-shield-unclassified'
         );
         tweets.forEach((tweet) => {
-          tweet.classList.remove('x-shield-pending', 'x-shield-approved', 'x-shield-filtered', 'x-shield-unclassified');
+          tweet.classList.remove('x-shield-pending', 'x-shield-approved', 'x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished', 'x-shield-unclassified');
+          // Remove distilled labels on navigation
+          const label = tweet.querySelector('.x-shield-distilled-label');
+          if (label) label.remove();
         });
 
         // Re-scan to pick up all visible tweets on the new page
