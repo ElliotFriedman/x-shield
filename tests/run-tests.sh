@@ -167,7 +167,8 @@ classify_tweet() {
   local exit_code=0
 
   # Call claude CLI with the same args server.js uses
-  raw_output=$(echo "$formatted_tweet" | claude \
+  # Unset CLAUDECODE to allow running inside a Claude Code session
+  raw_output=$(echo "$formatted_tweet" | env -u CLAUDECODE claude \
     -p \
     --system-prompt "$SYSTEM_PROMPT" \
     --output-format json \
