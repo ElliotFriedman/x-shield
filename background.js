@@ -89,18 +89,25 @@ let logBuffer = [];
 async function flushLogBuffer() {
   if (logBuffer.length === 0) return;
   const settings = await getSettings();
-  if (!settings.loggingEnabled) return;
+  if (!settings.loggingEnabled) {
+    logBuffer = [];
+    return;
+  }
 
   const batch = logBuffer;
   logBuffer = [];
 
   try {
     const db = await logDBReady;
-    const tx = db.transaction('classifications', 'readwrite');
-    const store = tx.objectStore('classifications');
-    for (const entry of batch) {
-      store.add(entry);
-    }
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('classifications', 'readwrite');
+      const store = tx.objectStore('classifications');
+      for (const entry of batch) {
+        store.add(entry);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   } catch (e) {
     console.error('[X-Shield] Failed to flush log buffer:', e);
   }
