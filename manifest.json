@@ -27,7 +27,7 @@
     }
   },
   "web_accessible_resources": [{
-    "resources": ["blocked.html", "blocked.js", "log.html"],
+    "resources": ["blocked.html", "blocked.js"],
     "matches": ["https://x.com/*"]
   }]
 }

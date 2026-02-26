@@ -143,32 +143,43 @@ tbody tr.filter-hidden { display: none; }
 (function() {
   'use strict';
 
-  var tbody = document.getElementById('table-body');
-  var emptyRow = document.getElementById('empty-row');
-  var statsContainer = document.getElementById('stats-container');
-  var filterIndicator = document.getElementById('filter-indicator');
-  var filterName = document.getElementById('filter-name');
-  var activeFilter = null;
-  var latestTimestamp = 0;
+  const MAX_TABLE_ROWS = 500;
+  const tbody = document.getElementById('table-body');
+  const statsContainer = document.getElementById('stats-container');
+  const filterIndicator = document.getElementById('filter-indicator');
+  const filterName = document.getElementById('filter-name');
+  let emptyRow = document.getElementById('empty-row');
+  let activeFilter = null;
+  let latestTimestamp = 0;
 
   function escapeHtml(str) {
     if (!str) return '';
-    var div = document.createElement('div');
+    const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
   }
 
+  function isSafeUrl(url) {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    } catch (e) {
+      return false;
+    }
+  }
+
   function formatTime(ts) {
-    var d = new Date(ts);
+    const d = new Date(ts);
     if (isNaN(d.getTime())) return '';
-    var month = String(d.getMonth() + 1).padStart(2, '0');
-    var day = String(d.getDate()).padStart(2, '0');
-    var time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     return month + '/' + day + ' ' + time;
   }
 
   // Map internal verdict names to display labels
-  var verdictLabels = { nourish: 'nourish', allow: 'show', block: 'filter', distill: 'distill' };
+  const verdictLabels = { nourish: 'nourish', allow: 'show', block: 'filter', distill: 'distill' };
 
   function updateStats(stats) {
     document.getElementById('stat-total').textContent = stats.total || 0;
@@ -179,32 +190,32 @@ tbody tr.filter-hidden { display: none; }
   }
 
   function createRow(entry, animate) {
-    var tr = document.createElement('tr');
+    const tr = document.createElement('tr');
     if (animate) tr.className = 'new-row';
-    var verdict = (entry.verdict || 'block').toLowerCase();
+    const verdict = (entry.verdict || 'block').toLowerCase();
     tr.setAttribute('data-verdict', verdict);
-    if (activeFilter && verdict !== activeFilter) tr.classList.add('filter-hidden');
 
-    var text = entry.tweetText || '';
-    var reason = entry.reason || '';
-    var distilled = entry.distilled || '';
-    var time = formatTime(entry.timestamp);
-    var truncated = text.length > 200;
-    var displayText = truncated ? text.substring(0, 200) : text;
-    var displayLabel = verdictLabels[verdict] || verdict;
-    var url = entry.tweetUrl || '';
+    const text = entry.tweetText || '';
+    const reason = entry.reason || '';
+    const distilled = entry.distilled || '';
+    const time = formatTime(entry.timestamp);
+    const truncated = text.length > 200;
+    const displayText = truncated ? text.substring(0, 200) : text;
+    const displayLabel = verdictLabels[verdict] || verdict;
+    const url = entry.tweetUrl || '';
+    const safeUrl = isSafeUrl(url) ? url : '';
 
     tr.innerHTML =
       '<td class="time">' + escapeHtml(time) + '</td>' +
-      '<td class="link-cell">' + (url ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" style="color:#4a9eff;text-decoration:none" title="Open tweet">&#x2197;</a>' : '') + '</td>' +
+      '<td class="link-cell">' + (safeUrl ? '<a href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener" style="color:#4a9eff;text-decoration:none" title="Open tweet">&#x2197;</a>' : '') + '</td>' +
       '<td class="verdict-cell"><span class="badge ' + escapeHtml(verdict) + '">' + escapeHtml(displayLabel) + '</span></td>' +
       '<td class="tweet-text"><div class="tweet-content' + (truncated ? ' truncated' : '') + '">' + escapeHtml(displayText) + '</div></td>' +
       '<td class="reason">' + escapeHtml(reason) + '</td>' +
       '<td class="distilled-cell">' + escapeHtml(distilled) + '</td>';
 
     if (truncated) {
-      var div = tr.querySelector('.tweet-content');
-      var expanded = false;
+      const div = tr.querySelector('.tweet-content');
+      let expanded = false;
       div.addEventListener('click', function() {
         expanded = !expanded;
         this.textContent = expanded ? text : displayText;
@@ -214,8 +225,14 @@ tbody tr.filter-hidden { display: none; }
     return tr;
   }
 
+  function trimTableRows() {
+    while (tbody.children.length > MAX_TABLE_ROWS) {
+      tbody.removeChild(tbody.lastChild);
+    }
+  }
+
   function loadHistory(verdict) {
-    var msg = { type: 'GET_LOG_HISTORY', limit: 500 };
+    const msg = { type: 'GET_LOG_HISTORY', limit: 500 };
     if (verdict) msg.verdict = verdict;
 
     chrome.runtime.sendMessage(msg, function(response) {
@@ -227,7 +244,7 @@ tbody tr.filter-hidden { display: none; }
       tbody.innerHTML = '';
       emptyRow = null;
 
-      var entries = response.entries || [];
+      const entries = response.entries || [];
       if (entries.length === 0) {
         emptyRow = document.createElement('tr');
         emptyRow.className = 'empty-state';
@@ -238,10 +255,11 @@ tbody tr.filter-hidden { display: none; }
         return;
       }
 
-      for (var i = 0; i < entries.length; i++) {
-        var row = createRow(entries[i], false);
-        tbody.appendChild(row);
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < entries.length; i++) {
+        frag.appendChild(createRow(entries[i], false));
       }
+      tbody.appendChild(frag);
 
       // Track newest timestamp for polling
       latestTimestamp = entries[0].timestamp || 0;
@@ -250,7 +268,7 @@ tbody tr.filter-hidden { display: none; }
 
   // Polling for new entries
   function pollForUpdates() {
-    var msg = { type: 'GET_LOG_HISTORY', limit: 50 };
+    const msg = { type: 'GET_LOG_HISTORY', limit: 50 };
     if (activeFilter) msg.verdict = activeFilter;
 
     chrome.runtime.sendMessage(msg, function(response) {
@@ -258,15 +276,15 @@ tbody tr.filter-hidden { display: none; }
 
       updateStats(response.stats || {});
 
-      var entries = response.entries || [];
+      const entries = response.entries || [];
       if (entries.length === 0) return;
 
-      var newestTs = entries[0].timestamp || 0;
+      const newestTs = entries[0].timestamp || 0;
       if (newestTs <= latestTimestamp) return;
 
-      // Insert new entries at top
-      var newEntries = [];
-      for (var i = 0; i < entries.length; i++) {
+      // Collect new entries
+      const newEntries = [];
+      for (let i = 0; i < entries.length; i++) {
         if (entries[i].timestamp > latestTimestamp) {
           newEntries.push(entries[i]);
         } else {
@@ -280,8 +298,8 @@ tbody tr.filter-hidden { display: none; }
           emptyRow = null;
         }
         // Insert newest first at top of table
-        for (var j = newEntries.length - 1; j >= 0; j--) {
-          var row = createRow(newEntries[j], true);
+        for (let j = newEntries.length - 1; j >= 0; j--) {
+          const row = createRow(newEntries[j], true);
           if (tbody.firstChild) {
             tbody.insertBefore(row, tbody.firstChild);
           } else {
@@ -289,6 +307,7 @@ tbody tr.filter-hidden { display: none; }
           }
         }
         latestTimestamp = newestTs;
+        trimTableRows();
       }
     });
   }
@@ -298,17 +317,17 @@ tbody tr.filter-hidden { display: none; }
     if (activeFilter === verdict) verdict = null;
     activeFilter = verdict;
 
-    var cards = document.querySelectorAll('.stat-card');
+    const cards = document.querySelectorAll('.stat-card');
     if (verdict) {
       statsContainer.classList.add('filtered');
-      for (var i = 0; i < cards.length; i++) {
+      for (let i = 0; i < cards.length; i++) {
         cards[i].classList.toggle('active', cards[i].classList.contains(verdict));
       }
       filterIndicator.classList.add('visible');
       filterName.textContent = verdictLabels[verdict] || verdict;
     } else {
       statsContainer.classList.remove('filtered');
-      for (var i = 0; i < cards.length; i++) {
+      for (let i = 0; i < cards.length; i++) {
         cards[i].classList.remove('active');
       }
       filterIndicator.classList.remove('visible');
@@ -320,10 +339,10 @@ tbody tr.filter-hidden { display: none; }
 
   document.querySelectorAll('.stat-card').forEach(function(card) {
     card.addEventListener('click', function() {
-      var classes = this.className.split(' ');
-      var verdict = null;
-      var verdicts = ['nourish', 'allow', 'block', 'distill'];
-      for (var i = 0; i < classes.length; i++) {
+      const classes = this.className.split(' ');
+      let verdict = null;
+      const verdicts = ['nourish', 'allow', 'block', 'distill'];
+      for (let i = 0; i < classes.length; i++) {
         if (verdicts.indexOf(classes[i]) !== -1) { verdict = classes[i]; break; }
       }
       if (this.classList.contains('total')) {
