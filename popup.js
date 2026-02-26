@@ -1,3 +1,5 @@
+const LOCAL_SERVER = 'http://127.0.0.1:7890';
+
 // ===== DOM Elements =====
 const els = {
   btnModeLocal: document.getElementById('btn-mode-local'),
@@ -80,7 +82,7 @@ function saveApiKey() {
 
 // ===== Server Status =====
 function checkServerStatus() {
-  fetch('http://127.0.0.1:7890/health')
+  fetch(`${LOCAL_SERVER}/health`)
     .then((res) => {
       if (res.ok) {
         els.serverStatusText.textContent = 'Local server: connected';

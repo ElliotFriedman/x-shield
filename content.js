@@ -19,6 +19,8 @@
   const SPA_POLL_INTERVAL_MS = 1000;
 
   const VERDICT_PRIORITY = { nourish: 0, allow: 1, distill: 2, block: 3, pending: 4 };
+  const TWEET_SELECTOR = 'article[data-testid="tweet"]';
+  const X_SHIELD_CLASSES = ['x-shield-pending', 'x-shield-approved', 'x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished', 'x-shield-unclassified'];
 
   // ---------------------------------------------------------------
   // State
@@ -29,7 +31,7 @@
   let batchTimer = null;
   let lastUrl = location.href;
   let observer = null;
-  let observerPaused = false;
+  let observerPauseDepth = 0;
 
   // ---------------------------------------------------------------
   // Content hash — simple djb2-style hash returning a hex string
@@ -53,12 +55,14 @@
       try {
         chrome.runtime.sendMessage(msg, (response) => {
           if (chrome.runtime.lastError) {
+            console.warn('[X-Shield] sendMessage error:', chrome.runtime.lastError.message, 'for', msg.type);
             resolve(null);
           } else {
             resolve(response);
           }
         });
       } catch (e) {
+        console.warn('[X-Shield] sendMessage exception:', e.message, 'for', msg.type);
         resolve(null);
       }
     });
@@ -118,12 +122,9 @@
   }
 
   function hideAllTweets() {
-    const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+    const tweets = document.querySelectorAll(TWEET_SELECTOR);
     tweets.forEach((tweet) => {
-      if (!tweet.classList.contains('x-shield-approved') &&
-          !tweet.classList.contains('x-shield-filtered') &&
-          !tweet.classList.contains('x-shield-distilled') &&
-          !tweet.classList.contains('x-shield-nourished')) {
+      if (!X_SHIELD_CLASSES.some(cls => cls !== 'x-shield-pending' && cls !== 'x-shield-unclassified' && tweet.classList.contains(cls))) {
         tweet.classList.add('x-shield-pending');
       }
     });
@@ -132,48 +133,46 @@
   // ---------------------------------------------------------------
   // Tweet content extraction
   // ---------------------------------------------------------------
-  function extractTweetContent(article) {
-    // Primary tweet text
+  function extractTweetParts(article) {
     const textEl = article.querySelector('[data-testid="tweetText"]');
     const text = textEl ? textEl.textContent.trim() : '';
 
-    // Author — pull from the user name element within the tweet
     let author = '';
-    const userNameEl = article.querySelector(
-      '[data-testid="User-Name"]'
-    );
+    const userNameEl = article.querySelector('[data-testid="User-Name"]');
     if (userNameEl) {
-      // The first link inside typically holds the display name
       const nameLink = userNameEl.querySelector('a');
-      if (nameLink) {
-        author = nameLink.textContent.trim();
-      }
+      if (nameLink) author = nameLink.textContent.trim();
     }
 
-    // Quote tweet text — nested tweet content inside the article
     let quoteTweetText = '';
-    const quoteEl = article.querySelector(
-      '[data-testid="quoteTweet"] [data-testid="tweetText"]'
-    );
-    if (quoteEl) {
-      quoteTweetText = quoteEl.textContent.trim();
-    }
+    const quoteEl = article.querySelector('[data-testid="quoteTweet"] [data-testid="tweetText"]');
+    if (quoteEl) quoteTweetText = quoteEl.textContent.trim();
 
-    // Link preview / card text
     let linkPreviewText = '';
     const cardEl = article.querySelector('[data-testid="card.wrapper"]');
-    if (cardEl) {
-      linkPreviewText = cardEl.textContent.trim() || '';
+    if (cardEl) linkPreviewText = cardEl.textContent.trim() || '';
+
+    let url = '';
+    const timeLink = article.querySelector('a[href*="/status/"] time');
+    if (timeLink) {
+      const anchor = timeLink.closest('a');
+      if (anchor) url = 'https://x.com' + anchor.getAttribute('href');
     }
 
-    // Compose full text for classification
-    const parts = [text];
-    if (author) parts.push('Author: ' + author);
-    if (quoteTweetText) parts.push('Quote: ' + quoteTweetText);
-    if (linkPreviewText) parts.push('Link: ' + linkPreviewText);
-    const fullText = parts.join('\n');
+    return { text, author, quoteTweetText, linkPreviewText, url };
+  }
 
-    return { text: fullText };
+  function formatForClassification(parts) {
+    const segments = [parts.text];
+    if (parts.author) segments.push('Author: ' + parts.author);
+    if (parts.quoteTweetText) segments.push('Quote: ' + parts.quoteTweetText);
+    if (parts.linkPreviewText) segments.push('Link: ' + parts.linkPreviewText);
+    return segments.join('\n');
+  }
+
+  function extractTweetContent(article) {
+    const parts = extractTweetParts(article);
+    return { text: formatForClassification(parts), url: parts.url };
   }
 
   // ---------------------------------------------------------------
@@ -182,21 +181,24 @@
   function applyVerdict(element, verdict, distilled) {
     element.classList.remove('x-shield-pending');
 
-    if (verdict === 'nourish') {
-      element.classList.add('x-shield-nourished');
-      element.classList.remove('x-shield-filtered', 'x-shield-approved', 'x-shield-distilled');
-    } else if (verdict === 'distill' && distilled) {
-      element.classList.add('x-shield-distilled');
-      element.classList.remove('x-shield-filtered', 'x-shield-approved', 'x-shield-nourished');
-      applyDistilledText(element, distilled);
-    } else if (verdict === 'allow') {
-      element.classList.add('x-shield-approved');
-      element.classList.remove('x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished');
+    const VERDICT_TO_CLASS = {
+      nourish: 'x-shield-nourished',
+      distill: 'x-shield-distilled',
+      allow: 'x-shield-approved',
+    };
+
+    // Remove all verdict classes first
+    element.classList.remove('x-shield-filtered', 'x-shield-approved', 'x-shield-distilled', 'x-shield-nourished');
+
+    const targetClass = VERDICT_TO_CLASS[verdict];
+    if (targetClass) {
+      element.classList.add(targetClass);
+      if (verdict === 'distill' && distilled) {
+        applyDistilledText(element, distilled);
+      }
     } else {
-      // Any non-"allow" verdict (including "block", undefined, null,
-      // malformed) results in filtering — fail closed
+      // Fail closed: any unrecognized verdict gets filtered
       element.classList.add('x-shield-filtered');
-      element.classList.remove('x-shield-approved', 'x-shield-distilled', 'x-shield-nourished');
     }
   }
 
@@ -236,6 +238,35 @@
     }
   }
 
+  function findElementByContentHash(hash) {
+    if (!hash) return null;
+    const pending = document.querySelectorAll(TWEET_SELECTOR + '.x-shield-pending');
+    for (const candidate of pending) {
+      const { text: candidateText } = extractTweetContent(candidate);
+      if (contentHash(candidateText) === hash) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function resolveElement(id, batchElements, batchHashes, verdictHash) {
+    let element = batchElements.get(id) || elementMap.get(id);
+    if (!element || !element.isConnected) {
+      const hash = batchHashes.get(id) || verdictHash;
+      element = findElementByContentHash(hash);
+    }
+    return element;
+  }
+
+  function cleanDisconnectedElements() {
+    for (const [id, element] of elementMap) {
+      if (!element.isConnected) {
+        elementMap.delete(id);
+      }
+    }
+  }
+
   async function flushBatch() {
     if (batchTimer) {
       clearTimeout(batchTimer);
@@ -248,14 +279,17 @@
     const batch = batchQueue;
     batchQueue = [];
 
-    // Store element references keyed by id before sending
+    // Store element references and content hashes keyed by id before sending
     const batchElements = new Map();
+    const batchHashes = new Map();
     const payload = batch.map((item) => {
       batchElements.set(item.id, item.element);
+      batchHashes.set(item.id, item.hash);
       elementMap.set(item.id, item.element);
       return {
         id: item.id,
         text: item.text,
+        url: item.url || '',
       };
     });
 
@@ -276,6 +310,11 @@
       return;
     }
 
+    // Thread context: on a thread page, don't filter the thread author's
+    // tweets — upgrade "block" to "allow" so the thread remains readable
+    const onThread = isOnThreadPage();
+    const threadAuthor = onThread ? getThreadAuthor() : null;
+
     // Apply verdicts
     const batchVerdictInfo = new Map();
 
@@ -285,27 +324,44 @@
         return;
       }
 
-      const element = batchElements.get(v.id) || elementMap.get(v.id);
-      if (!element) return;
+      let verdict = v.verdict;
 
-      applyVerdict(element, v.verdict, v.distilled);
+      // Cache the verdict by content hash first — even if element is gone,
+      // future instances of the same tweet will get the cached verdict
+      if (v.hash) {
+        verdictCache.set(v.hash, { verdict, distilled: v.distilled });
+      }
+
+      let element = resolveElement(v.id, batchElements, batchHashes, v.hash);
+
+      if (!element || !element.isConnected) {
+        // Element is truly gone — verdict is cached, will apply on re-detection
+        batchElements.delete(v.id);
+        elementMap.delete(v.id);
+        return;
+      }
+
+      // Thread coherence: upgrade filtered tweets from the thread author
+      // to "allow" so the thread doesn't have gaps
+      if (onThread && verdict === 'block' && threadAuthor) {
+        const tweetAuthor = getAuthorFromElement(element);
+        if (tweetAuthor === threadAuthor) {
+          verdict = 'allow';
+        }
+      }
+
+      applyVerdict(element, verdict, v.distilled);
 
       // Track for reordering
-      batchVerdictInfo.set(v.id, { element, verdict: v.verdict });
-
-      // Cache the verdict by content hash if we have one
-      if (v.hash) {
-        verdictCache.set(v.hash, { verdict: v.verdict, distilled: v.distilled });
-      }
+      batchVerdictInfo.set(v.id, { element, verdict });
 
       // Clean up element references to prevent memory leak
       batchElements.delete(v.id);
       elementMap.delete(v.id);
     });
 
-    // Update feed reordering setting and reorder this batch by verdict priority
-    feedReorderingEnabled = response.feedReorderingEnabled !== false;
-    reorderBatch(batchVerdictInfo);
+    // Reorder this batch by verdict priority
+    reorderBatch(batchVerdictInfo, response.feedReorderingEnabled !== false);
 
     // For any tweets in the batch that did NOT receive a verdict,
     // they stay hidden (fail closed) — clean up references anyway
@@ -315,11 +371,36 @@
   }
 
   // ---------------------------------------------------------------
+  // Thread detection — prevent filtering individual tweets from a
+  // thread, which creates gaps and breaks readability
+  // ---------------------------------------------------------------
+  function isOnThreadPage() {
+    return /^\/[^/]+\/status\/\d+/.test(location.pathname);
+  }
+
+  function getThreadAuthor() {
+    // On a thread page like /user/status/123, the author is in the URL
+    const match = location.pathname.match(/^\/([^/]+)\/status\/\d+/);
+    return match ? match[1].toLowerCase() : null;
+  }
+
+  function getAuthorFromElement(element) {
+    const userNameEl = element.querySelector('[data-testid="User-Name"]');
+    if (!userNameEl) return null;
+    // The handle link (second link) contains @username
+    const links = userNameEl.querySelectorAll('a[href^="/"]');
+    for (const link of links) {
+      const href = link.getAttribute('href');
+      if (href && /^\/[^/]+$/.test(href)) {
+        return href.slice(1).toLowerCase();
+      }
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------
   // Feed reordering — sort tweets within each batch by verdict priority
   // ---------------------------------------------------------------
-
-  // Track whether feed reordering is enabled (loaded from settings)
-  let feedReorderingEnabled = true;
 
   function isOnFeedPage() {
     const path = location.pathname;
@@ -332,7 +413,7 @@
     return article.closest('[data-testid="cellInnerDiv"]');
   }
 
-  function reorderBatch(batchElements) {
+  function reorderBatch(batchElements, feedReorderingEnabled) {
     if (!feedReorderingEnabled || !isOnFeedPage()) return;
 
     // Collect cellInnerDiv wrappers with their verdict priorities
@@ -342,7 +423,7 @@
       if (!cell) continue;
 
       // Only reorder cells that contain tweet articles (skip ads, "who to follow", etc.)
-      if (!cell.querySelector('article[data-testid="tweet"]')) continue;
+      if (!cell.querySelector(TWEET_SELECTOR)) continue;
 
       const priority = VERDICT_PRIORITY[info.verdict] ?? VERDICT_PRIORITY.pending;
       entries.push({ cell, priority, id });
@@ -432,17 +513,12 @@
   // ---------------------------------------------------------------
   function processTweet(article) {
     // Guard: skip if already processed
-    if (article.classList.contains('x-shield-pending') ||
-        article.classList.contains('x-shield-approved') ||
-        article.classList.contains('x-shield-filtered') ||
-        article.classList.contains('x-shield-distilled') ||
-        article.classList.contains('x-shield-nourished') ||
-        article.classList.contains('x-shield-unclassified')) {
+    if (X_SHIELD_CLASSES.some(cls => article.classList.contains(cls))) {
       return;
     }
 
     // Step 1: extract content BEFORE hiding (innerText requires visibility)
-    const { text } = extractTweetContent(article);
+    const { text, url } = extractTweetContent(article);
     const hash = contentHash(text);
 
     // Step 2: hide immediately (fail closed)
@@ -461,6 +537,7 @@
     addToBatchQueue({
       id: tweetId,
       text: text,
+      url: url,
       element: article,
       hash: hash,
     });
@@ -473,12 +550,12 @@
     if (!root || !root.querySelectorAll) return;
 
     // Check if the root itself is a tweet
-    if (root.matches && root.matches('article[data-testid="tweet"]')) {
+    if (root.matches && root.matches(TWEET_SELECTOR)) {
       processTweet(root);
     }
 
     // Check children
-    const articles = root.querySelectorAll('article[data-testid="tweet"]');
+    const articles = root.querySelectorAll(TWEET_SELECTOR);
     articles.forEach(processTweet);
   }
 
@@ -487,7 +564,7 @@
   // ---------------------------------------------------------------
   function setupObserver() {
     observer = new MutationObserver((mutations) => {
-      if (observerPaused) return;
+      if (observerPauseDepth > 0) return;
       let checkTabs = false;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
@@ -510,13 +587,12 @@
   }
 
   function pauseObserver() {
-    observerPaused = true;
+    observerPauseDepth++;
   }
 
   function resumeObserver() {
-    // Use microtask to resume after current DOM mutations are processed
     queueMicrotask(() => {
-      observerPaused = false;
+      if (observerPauseDepth > 0) observerPauseDepth--;
     });
   }
 
@@ -526,6 +602,7 @@
   function startHeartbeat() {
     setInterval(async () => {
       if (document.visibilityState !== 'visible') return;
+      cleanDisconnectedElements();
 
       const response = await sendMessage({ type: 'HEARTBEAT' });
 
@@ -556,15 +633,10 @@
         // Strip x-shield classes from existing tweets so recycled DOM
         // elements get re-classified on the new page
         const tweets = document.querySelectorAll(
-          'article[data-testid="tweet"].x-shield-pending,' +
-          'article[data-testid="tweet"].x-shield-approved,' +
-          'article[data-testid="tweet"].x-shield-filtered,' +
-          'article[data-testid="tweet"].x-shield-distilled,' +
-          'article[data-testid="tweet"].x-shield-nourished,' +
-          'article[data-testid="tweet"].x-shield-unclassified'
+          X_SHIELD_CLASSES.map(cls => TWEET_SELECTOR + '.' + cls).join(',')
         );
         tweets.forEach((tweet) => {
-          tweet.classList.remove('x-shield-pending', 'x-shield-approved', 'x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished', 'x-shield-unclassified');
+          tweet.classList.remove(...X_SHIELD_CLASSES);
           // Remove distilled labels on navigation
           const label = tweet.querySelector('.x-shield-distilled-label');
           if (label) label.remove();
