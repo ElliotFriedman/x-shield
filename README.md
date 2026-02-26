@@ -2,83 +2,83 @@
 
 **AI-powered content filter for X (Twitter) that protects your mental health.**
 
-## Why This Exists
+X-Shield sits between you and your feed, using Claude AI to evaluate every tweet before you see it. Rage bait, engagement farming, tribal dunking, and emotional manipulation get filtered out silently. What remains is content that's actually worth your attention.
 
-Social media is engineered to hijack your brain. Every algorithm, every recommendation, every "trending" section is optimized for one thing: keeping you engaged. And what keeps you engaged isn't what's good for you — it's outrage, fear, conflict, and manufactured controversy. The content that makes you doom-scroll for hours is the digital equivalent of junk food: engineered to be irresistible, impossible to stop consuming, and deeply harmful over time.
+It also enforces a configurable **daily time limit** — once you've spent your allotted time on X, all tabs close and access is blocked until the next day.
 
-Consuming unfiltered social media and expecting it not to affect your mental health is like eating fast food for every meal and being surprised when your health deteriorates. The rage bait, the pile-ons, the tribal "us vs. them" framing, the performative outrage — none of it adds value to your life. It just drains your cognitive energy and leaves you anxious, angry, and exhausted.
+## Quickstart
 
-X-Shield interrupts the doom-scroll loop. It sits between you and your feed, using AI to evaluate every tweet before you see it. Content designed to manipulate your emotions — rage bait, engagement farming, outrage porn, tribal dunking — gets filtered out silently. What remains is the content that actually enriches your life: genuine information, creative work, authentic human connection, and thoughtful analysis.
+### Prerequisites
 
-Think of it as a nutritionist for your information diet. You still get to use social media, but you only see the content that's actually worth your attention.
+- **Node.js** (any recent version)
+- **[Claude CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`claude` command available in your terminal)
+- **Claude Max subscription** (CLI usage at no extra cost)
+- **Chrome or Brave** browser
 
-X-Shield also includes a **daily time limit**. Once you've spent your allotted time on X, the extension closes all X tabs and blocks further access until the next day. Because even healthy content consumed endlessly is still a time sink — your attention is finite, and it deserves to be spent intentionally.
+### 1. Clone and start the local server
+
+```bash
+git clone git@github.com:ElliotFriedman/x-shield.git
+cd x-shield
+node server.js
+```
+
+You should see:
+
+```
+[X-Shield Server] Listening on http://127.0.0.1:7890
+[X-Shield Server] Pre-warming 3 Claude processes...
+```
+
+Leave this terminal running.
+
+### 2. Load the extension
+
+1. Open `chrome://extensions` (or `brave://extensions`)
+2. Enable **Developer mode** (toggle in top right)
+3. Click **Load unpacked**
+4. Select the `x-shield` directory you just cloned
+
+### 3. Verify and browse
+
+1. Click the X-Shield extension icon in your toolbar
+2. Confirm "Claude Code" mode is selected (it's the default)
+3. The popup should show **"Local server: connected"**
+4. Open [x.com](https://x.com) — tweets will be classified automatically
+
+The local server must be running whenever you use X. If it's not running, X-Shield will show an overlay prompting you to start it.
+
+### Alternative: API Key Mode (no local server)
+
+If you don't have a Claude Max subscription, you can use an Anthropic API key instead:
+
+1. Load the extension (step 2 above)
+2. Click the X-Shield icon and switch the toggle to **"API Key"**
+3. Enter your [Anthropic API key](https://console.anthropic.com/) and click Save
+4. Open [x.com](https://x.com) — no local server needed, but you pay per token
 
 ## How It Works
 
-X-Shield is a Chrome/Brave extension with a **fail-closed** design — tweets are hidden by default and only shown after AI classification approves them.
+X-Shield uses a **fail-closed** design — tweets are hidden by default and only shown after AI classification approves them.
 
 1. A tweet appears in your feed
 2. X-Shield immediately hides it (you never see unclassified content)
-3. The tweet text is sent to Claude (Anthropic's AI) for classification
+3. The tweet text is sent to Claude for classification
 4. Claude evaluates whether the tweet is genuinely enriching or just engagement bait
 5. Approved tweets fade in. Everything else stays hidden.
 
 If anything goes wrong — server down, API error, malformed response — tweets stay hidden. The system never fails open.
 
-## Two Classification Modes
+### Classification Verdicts
 
-X-Shield supports two ways to connect to Claude for classification. Choose the one that fits your setup:
+| Verdict | What it means | What you see |
+|---|---|---|
+| **show** | Genuine content — factual reporting, creative work, authentic updates, opinions backed by reasoning | Tweet fades in normally |
+| **nourish** | Actively benefits well-being — high bar, reserved for content a psychologist would point to as beneficial | Tweet shown with visual promotion |
+| **distill** | Real information wrapped in manipulation — Claude rewrites it in neutral tone | Purple border + "distilled by X-Shield" label |
+| **filter** | Pure manipulation — rage bait, engagement bait, tribal dunking, performative outrage | Hidden completely |
 
-### Option A: Claude Code (Recommended — Free)
-
-Routes classification through a local Node.js server that calls the Claude CLI. If you have a Claude Max subscription, this costs nothing extra.
-
-**Requirements:**
-- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- Claude Max subscription
-- Node.js installed
-
-**Setup:**
-1. Clone and start the server:
-   ```bash
-   git clone git@github.com:ElliotFriedman/x-shield.git
-   cd x-shield
-   node server.js
-   ```
-   You should see: `[X-Shield Server] Listening on http://127.0.0.1:7890`
-
-2. Load the extension:
-   - Go to `chrome://extensions` (or `brave://extensions`)
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select the `x-shield` directory
-
-3. Open the extension popup and make sure "Claude Code" is selected (it's the default)
-4. The popup should show "Local server: connected"
-5. Open [x.com](https://x.com) — tweets will be classified automatically
-
-**Note:** The local server must be running whenever you use X. If it's not running, X-Shield will show an overlay prompting you to start it.
-
-### Option B: API Key (Pay-Per-Use)
-
-Calls the Anthropic API directly from the browser extension. No local server needed, but you pay per token.
-
-**Requirements:**
-- An [Anthropic API key](https://console.anthropic.com/)
-
-**Setup:**
-1. Clone and load the extension:
-   ```bash
-   git clone git@github.com:ElliotFriedman/x-shield.git
-   ```
-   - Go to `chrome://extensions` (or `brave://extensions`)
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select the `x-shield` directory
-
-2. Open the extension popup
-3. Switch the toggle to "API Key"
-4. Enter your Anthropic API key and click Save
-5. Open [x.com](https://x.com) — tweets will be classified automatically
+Classification is based on **intent and delivery**, not topic. Negative news reported factually gets shown. The same news wrapped in outrage framing gets distilled or filtered.
 
 ## Features
 
@@ -88,6 +88,7 @@ Calls the Anthropic API directly from the browser extension. No local server nee
 - **Dual classification modes** — Claude Code (free via CLI) or API Key (pay-per-use) — switch anytime from the popup
 - **Caching** — Classification results cached for 24 hours so repeated content isn't re-classified
 - **Distraction removal** — Trending sidebar, "Who to follow", "You might like", and "Relevant people" sections are all hidden
+- **Zero dependencies** — No npm packages, no build step, no bundler. Pure vanilla JavaScript.
 
 ## Configuration
 
