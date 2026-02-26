@@ -675,62 +675,39 @@ async function handleGetLogHistory(message) {
     const limit = Math.max(1, Math.min(parseInt(message.limit, 10) || 200, 5000));
     const offset = Math.max(0, parseInt(message.offset, 10) || 0);
 
-    return new Promise((resolve) => {
+    // Single cursor pass — same proven pattern as handleExportLog
+    const allEntries = await new Promise((resolve, reject) => {
       const tx = db.transaction('classifications', 'readonly');
-      const store = tx.objectStore('classifications');
-      const verdictIndex = store.index('verdict');
-
-      // Use IDBIndex.count() for O(log n) stats instead of full cursor scan
-      const stats = { total: 0, nourish: 0, allow: 0, block: 0, distill: 0 };
-      let countsRemaining = VALID_VERDICTS.length + 1;
-
-      function onCountDone() {
-        countsRemaining--;
-        if (countsRemaining > 0) return;
-
-        // All counts collected — now fetch paginated entries (newest first)
-        const entries = [];
-        const tsIndex = store.index('timestamp');
-        let skipped = 0;
-        const cursorReq = tsIndex.openCursor(null, 'prev');
-        cursorReq.onsuccess = (e) => {
-          const c = e.target.result;
-          if (c) {
-            if (verdictFilter && c.value.verdict !== verdictFilter) {
-              c.continue();
-              return;
-            }
-            if (skipped < offset) {
-              skipped++;
-              c.continue();
-              return;
-            }
-            if (entries.length < limit) {
-              entries.push(c.value);
-              c.continue();
-            } else {
-              resolve({ entries, stats });
-            }
-          } else {
-            resolve({ entries, stats });
-          }
-        };
-        cursorReq.onerror = () => resolve({ entries: [], stats });
-      }
-
-      // Total count
-      const totalReq = store.count();
-      totalReq.onsuccess = () => { stats.total = totalReq.result; onCountDone(); };
-      totalReq.onerror = () => onCountDone();
-
-      // Per-verdict counts using the verdict index
-      for (const v of VALID_VERDICTS) {
-        const req = verdictIndex.count(IDBKeyRange.only(v));
-        req.onsuccess = () => { stats[v] = req.result; onCountDone(); };
-        req.onerror = () => onCountDone();
-      }
+      const index = tx.objectStore('classifications').index('timestamp');
+      const results = [];
+      const req = index.openCursor(null, 'prev');
+      req.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          results.push(cursor.value);
+          cursor.continue();
+        } else {
+          resolve(results);
+        }
+      };
+      req.onerror = () => reject(req.error);
     });
+
+    // Compute stats from collected entries
+    const stats = { total: allEntries.length, nourish: 0, allow: 0, block: 0, distill: 0 };
+    for (const entry of allEntries) {
+      if (VALID_VERDICTS.includes(entry.verdict)) stats[entry.verdict]++;
+    }
+
+    // Filter and paginate
+    const filtered = verdictFilter
+      ? allEntries.filter(e => e.verdict === verdictFilter)
+      : allEntries;
+    const entries = filtered.slice(offset, offset + limit);
+
+    return { entries, stats };
   } catch (e) {
+    console.error('[X-Shield] GET_LOG_HISTORY error:', e);
     return { entries: [], stats: { total: 0, nourish: 0, allow: 0, block: 0, distill: 0 } };
   }
 }

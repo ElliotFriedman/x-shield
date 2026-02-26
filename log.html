@@ -236,7 +236,10 @@ tbody tr.filter-hidden { display: none; }
     if (verdict) msg.verdict = verdict;
 
     chrome.runtime.sendMessage(msg, function(response) {
-      if (chrome.runtime.lastError || !response) return;
+      if (chrome.runtime.lastError || !response) {
+        console.error('[X-Shield] loadHistory failed:', chrome.runtime.lastError);
+        return;
+      }
 
       updateStats(response.stats || {});
 
@@ -272,7 +275,10 @@ tbody tr.filter-hidden { display: none; }
     if (activeFilter) msg.verdict = activeFilter;
 
     chrome.runtime.sendMessage(msg, function(response) {
-      if (chrome.runtime.lastError || !response) return;
+      if (chrome.runtime.lastError || !response) {
+        console.error('[X-Shield] pollForUpdates failed:', chrome.runtime.lastError);
+        return;
+      }
 
       updateStats(response.stats || {});
 
