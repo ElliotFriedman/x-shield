@@ -36,7 +36,12 @@ header h1 span { color: #666; font-weight: 400; }
 .stat-card {
   background: #12121a; border: 1px solid #1e1e2e; border-radius: 8px;
   padding: 14px 20px; min-width: 130px; flex: 1;
+  cursor: pointer; transition: background 0.2s, border-color 0.2s, opacity 0.2s;
 }
+.stat-card:hover { background: #1a1a24; }
+.stats.filtered .stat-card { opacity: 0.45; }
+.stats.filtered .stat-card.active { opacity: 1; }
+.stat-card.active { border-color: #555; }
 .stat-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 4px; }
 .stat-card .value { font-size: 24px; font-weight: 700; }
 .stat-card.total .value { color: #e0e0e8; }
@@ -75,6 +80,18 @@ td.tweet-text { max-width: 500px; word-break: break-word; }
 .tweet-content.expanded { white-space: pre-wrap; }
 td.reason { color: #999; max-width: 300px; word-break: break-word; }
 td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; font-style: italic; }
+tbody tr.filter-hidden { display: none; }
+.filter-indicator {
+  font-size: 12px; color: #888; margin-bottom: 12px; display: none; align-items: center; gap: 8px;
+}
+.filter-indicator.visible { display: flex; }
+.filter-indicator .filter-label { color: #aaa; }
+.filter-indicator .btn-clear-filter {
+  background: none; border: 1px solid #2e2e3e; color: #888; padding: 2px 10px;
+  border-radius: 4px; font-family: inherit; font-size: 11px; cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.filter-indicator .btn-clear-filter:hover { background: #1e1e2e; color: #c8c8d0; }
 .empty-state { text-align: center; padding: 60px 20px; color: #444; }
 .empty-state .icon { font-size: 32px; margin-bottom: 12px; }
 .empty-state p { font-size: 14px; }
@@ -116,6 +133,10 @@ td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; fo
     <div class="stat-card filter"><div class="label">Filter</div><div class="value" id="stat-filter">0</div></div>
     <div class="stat-card distill"><div class="label">Distill</div><div class="value" id="stat-distill">0</div></div>
   </div>
+  <div class="filter-indicator" id="filter-indicator">
+    <span class="filter-label">Showing: <strong id="filter-name"></strong></span>
+    <button class="btn-clear-filter" id="btn-clear-filter">Show All</button>
+  </div>
   <div class="table-wrapper">
     <table>
       <thead><tr><th>Time</th><th>Link</th><th>Verdict</th><th>Tweet Text</th><th>Reason</th><th>Distilled</th></tr></thead>
@@ -131,10 +152,14 @@ td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; fo
 (function() {
   var entries = [];
   var counts = { total: 0, nourish: 0, show: 0, filter: 0, distill: 0 };
+  var activeFilter = null;
   var tbody = document.getElementById('table-body');
   var emptyRow = document.getElementById('empty-row');
   var connDot = document.getElementById('conn-dot');
   var connLabel = document.getElementById('conn-label');
+  var statsContainer = document.querySelector('.stats');
+  var filterIndicator = document.getElementById('filter-indicator');
+  var filterName = document.getElementById('filter-name');
 
   function escapeHtml(str) {
     if (!str) return '';
@@ -161,6 +186,8 @@ td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; fo
     var tr = document.createElement('tr');
     if (animate) tr.className = 'new-row';
     var verdict = (entry.verdict || 'show').toLowerCase();
+    tr.setAttribute('data-verdict', verdict);
+    if (activeFilter && verdict !== activeFilter) tr.classList.add('filter-hidden');
     var text = entry.text || '';
     var reason = entry.reason || '';
     var distilled = entry.distilled || '';
@@ -211,6 +238,59 @@ td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; fo
   }
 
   document.getElementById('btn-clear').addEventListener('click', clearAll);
+
+  // Verdict filtering via stat cards
+  function setFilter(verdict) {
+    if (activeFilter === verdict) verdict = null;
+    activeFilter = verdict;
+
+    // Toggle active class on stat cards
+    var cards = document.querySelectorAll('.stat-card');
+    if (verdict) {
+      statsContainer.classList.add('filtered');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.toggle('active', cards[i].classList.contains(verdict));
+      }
+      filterIndicator.classList.add('visible');
+      filterName.textContent = verdict;
+    } else {
+      statsContainer.classList.remove('filtered');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.remove('active');
+      }
+      filterIndicator.classList.remove('visible');
+    }
+
+    // Show/hide rows
+    var rows = tbody.querySelectorAll('tr[data-verdict]');
+    for (var i = 0; i < rows.length; i++) {
+      if (!verdict || rows[i].getAttribute('data-verdict') === verdict) {
+        rows[i].classList.remove('filter-hidden');
+      } else {
+        rows[i].classList.add('filter-hidden');
+      }
+    }
+  }
+
+  document.querySelectorAll('.stat-card').forEach(function(card) {
+    card.addEventListener('click', function() {
+      var classes = this.className.split(' ');
+      var verdict = null;
+      var verdicts = ['nourish', 'show', 'filter', 'distill'];
+      for (var i = 0; i < classes.length; i++) {
+        if (verdicts.indexOf(classes[i]) !== -1) { verdict = classes[i]; break; }
+      }
+      if (this.classList.contains('total')) {
+        setFilter(null);
+      } else if (verdict) {
+        setFilter(verdict);
+      }
+    });
+  });
+
+  document.getElementById('btn-clear-filter').addEventListener('click', function() {
+    setFilter(null);
+  });
 
   // Load history
   fetch('/debug/api').then(function(r) { return r.json(); }).then(function(data) {
