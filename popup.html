@@ -86,6 +86,27 @@
       <div class="stat-detail" id="filtered-pct"></div>
     </section>
 
+    <!-- Tweet Log Section -->
+    <section class="section" id="section-logging">
+      <h2 class="section-title">Tweet Log</h2>
+      <div class="setting-group">
+        <label class="setting-label">Log all classifications</label>
+        <div class="mode-toggle">
+          <button id="btn-log-off" class="btn btn-mode active">Off</button>
+          <button id="btn-log-on" class="btn btn-mode">On</button>
+        </div>
+      </div>
+      <div id="log-controls" class="hidden">
+        <div class="log-info">
+          <span id="log-count-text" class="log-count-text">0 entries logged</span>
+        </div>
+        <div class="log-actions">
+          <button id="btn-export-log" class="btn btn-primary btn-small">Export JSON</button>
+          <button id="btn-clear-log" class="btn btn-small btn-danger">Clear Log</button>
+        </div>
+      </div>
+    </section>
+
     <!-- Footer -->
     <footer class="footer">
       <span class="footer-version">X-Shield v2.0.0</span>

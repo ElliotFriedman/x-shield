@@ -358,6 +358,21 @@ body {
   color: #7c6bbd;
 }
 
+/* ===== Tweet Log ===== */
+.log-info {
+  margin-bottom: 8px;
+}
+
+.log-count-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.log-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ===== Utility ===== */
 .hidden {
   display: none !important;

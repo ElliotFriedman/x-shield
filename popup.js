@@ -20,6 +20,12 @@ const els = {
   statDistilled: document.getElementById('stat-distilled'),
   filteredPct: document.getElementById('filtered-pct'),
   btnResetStats: document.getElementById('btn-reset-stats'),
+  btnLogOff: document.getElementById('btn-log-off'),
+  btnLogOn: document.getElementById('btn-log-on'),
+  logControls: document.getElementById('log-controls'),
+  logCountText: document.getElementById('log-count-text'),
+  btnExportLog: document.getElementById('btn-export-log'),
+  btnClearLog: document.getElementById('btn-clear-log'),
 };
 
 let refreshInterval = null;
@@ -120,6 +126,9 @@ function loadSettings() {
     if (result.apiKey && result.apiKey.trim()) {
       els.inputApiKey.placeholder = 'sk-ant-****' + result.apiKey.slice(-4);
     }
+
+    // Logging toggle
+    updateLoggingUI(!!(result.settings && result.settings.loggingEnabled));
   });
 }
 
@@ -191,12 +200,76 @@ function resetStats() {
   });
 }
 
+// ===== Tweet Log =====
+let loggingEnabled = false;
+
+function updateLoggingUI(enabled) {
+  loggingEnabled = enabled;
+  if (enabled) {
+    els.btnLogOn.classList.add('active');
+    els.btnLogOff.classList.remove('active');
+    els.logControls.classList.remove('hidden');
+    loadLogCount();
+  } else {
+    els.btnLogOff.classList.add('active');
+    els.btnLogOn.classList.remove('active');
+    els.logControls.classList.add('hidden');
+  }
+}
+
+function toggleLogging(enabled) {
+  chrome.runtime.sendMessage({ type: 'SET_LOGGING', enabled }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.success) {
+      updateLoggingUI(response.enabled);
+    }
+  });
+}
+
+function loadLogCount() {
+  chrome.runtime.sendMessage({ type: 'GET_LOG_COUNT' }, (response) => {
+    if (chrome.runtime.lastError) return;
+    const count = (response && response.count) || 0;
+    els.logCountText.textContent = `${count} ${count === 1 ? 'entry' : 'entries'} logged`;
+  });
+}
+
+function exportLog() {
+  els.btnExportLog.textContent = 'Exporting...';
+  els.btnExportLog.disabled = true;
+  chrome.runtime.sendMessage({ type: 'EXPORT_LOG' }, (response) => {
+    els.btnExportLog.textContent = 'Export JSON';
+    els.btnExportLog.disabled = false;
+    if (chrome.runtime.lastError) return;
+    const entries = (response && response.entries) || [];
+    const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `x-shield-log-${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+function clearLog() {
+  if (!confirm('Clear all logged classifications? This cannot be undone.')) return;
+  chrome.runtime.sendMessage({ type: 'CLEAR_LOG' }, () => {
+    if (chrome.runtime.lastError) return;
+    loadLogCount();
+  });
+}
+
 // ===== Auto-Refresh =====
 function startAutoRefresh() {
   refreshInterval = setInterval(() => {
     loadStats();
     if (currentMode === 'local') {
       checkServerStatus();
+    }
+    if (loggingEnabled) {
+      loadLogCount();
     }
   }, 5000);
 }
@@ -218,4 +291,8 @@ function bindEvents() {
   });
   els.inputTimeLimit.addEventListener('change', saveTimeLimit);
   els.btnResetStats.addEventListener('click', resetStats);
+  els.btnLogOff.addEventListener('click', () => toggleLogging(false));
+  els.btnLogOn.addEventListener('click', () => toggleLogging(true));
+  els.btnExportLog.addEventListener('click', exportLog);
+  els.btnClearLog.addEventListener('click', clearLog);
 }

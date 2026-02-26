@@ -63,6 +63,51 @@ async function flushCacheToStorage() {
 // Flush dirty cache to storage every 5 seconds
 setInterval(flushCacheToStorage, 5000);
 
+// -------------------------------------------------------------------
+// IndexedDB tweet log — persistent classification history (opt-in)
+// -------------------------------------------------------------------
+function openLogDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('xshield-log', 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('classifications')) {
+        const store = db.createObjectStore('classifications', { keyPath: 'id', autoIncrement: true });
+        store.createIndex('timestamp', 'timestamp');
+        store.createIndex('verdict', 'verdict');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+const logDBReady = openLogDB();
+
+let logBuffer = [];
+
+async function flushLogBuffer() {
+  const settings = await getSettings();
+  if (!settings.loggingEnabled) return;
+  if (logBuffer.length === 0) return;
+
+  const batch = logBuffer;
+  logBuffer = [];
+
+  try {
+    const db = await logDBReady;
+    const tx = db.transaction('classifications', 'readwrite');
+    const store = tx.objectStore('classifications');
+    for (const entry of batch) {
+      store.add(entry);
+    }
+  } catch (e) {
+    console.error('[X-Shield] Failed to flush log buffer:', e);
+  }
+}
+
+setInterval(flushLogBuffer, 3000);
+
 async function getCacheEntry(hash) {
   await loadCacheIntoMemory();
   if (!cacheMemory[hash]) return null;
@@ -495,6 +540,26 @@ async function handleClassifyBatch(message) {
   }
 
   const allVerdicts = [...cachedResults, ...apiResults];
+
+  // Push classification entries to the log buffer (if logging enabled)
+  if (settings.loggingEnabled) {
+    const tweetMap = new Map(tweets.map(t => [t.id, t]));
+    const cachedSet = new Set(cachedResults);
+    for (const v of allVerdicts) {
+      const tweet = tweetMap.get(v.id);
+      logBuffer.push({
+        timestamp: Date.now(),
+        tweetText: tweet ? tweet.text : '',
+        tweetUrl: tweet ? (tweet.url || '') : '',
+        tweetHash: v.hash || '',
+        verdict: v.verdict,
+        reason: v.reason || '',
+        distilled: v.distilled || null,
+        cached: cachedSet.has(v),
+      });
+    }
+  }
+
   const stats = countVerdicts(allVerdicts);
   await updateDailyStats(stats.filtered, stats.shown, stats.nourished, stats.distilled);
 
@@ -546,6 +611,70 @@ async function handleSetMode(message) {
 }
 
 // -------------------------------------------------------------------
+// Tweet log message handlers
+// -------------------------------------------------------------------
+async function handleSetLogging(message) {
+  const settings = await getSettings();
+  settings.loggingEnabled = !!message.enabled;
+  await chrome.storage.local.set({ settings });
+  return { success: true, enabled: settings.loggingEnabled };
+}
+
+async function handleGetLogCount() {
+  try {
+    const db = await logDBReady;
+    return new Promise((resolve) => {
+      const tx = db.transaction('classifications', 'readonly');
+      const req = tx.objectStore('classifications').count();
+      req.onsuccess = () => resolve({ count: req.result });
+      req.onerror = () => resolve({ count: 0 });
+    });
+  } catch (e) {
+    return { count: 0 };
+  }
+}
+
+async function handleExportLog() {
+  await flushLogBuffer();
+  try {
+    const db = await logDBReady;
+    return new Promise((resolve) => {
+      const tx = db.transaction('classifications', 'readonly');
+      const index = tx.objectStore('classifications').index('timestamp');
+      const entries = [];
+      const req = index.openCursor();
+      req.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          entries.push(cursor.value);
+          cursor.continue();
+        } else {
+          resolve({ entries });
+        }
+      };
+      req.onerror = () => resolve({ entries: [] });
+    });
+  } catch (e) {
+    return { entries: [] };
+  }
+}
+
+async function handleClearLog() {
+  logBuffer = [];
+  try {
+    const db = await logDBReady;
+    return new Promise((resolve) => {
+      const tx = db.transaction('classifications', 'readwrite');
+      const req = tx.objectStore('classifications').clear();
+      req.onsuccess = () => resolve({ success: true });
+      req.onerror = () => resolve({ success: false });
+    });
+  } catch (e) {
+    return { success: false };
+  }
+}
+
+// -------------------------------------------------------------------
 // Message handler — dispatcher
 // -------------------------------------------------------------------
 const MESSAGE_HANDLERS = {
@@ -557,6 +686,10 @@ const MESSAGE_HANDLERS = {
   RESET_STATS: handleResetStats,
   SET_API_KEY: handleSetApiKey,
   SET_MODE: handleSetMode,
+  SET_LOGGING: handleSetLogging,
+  GET_LOG_COUNT: handleGetLogCount,
+  EXPORT_LOG: handleExportLog,
+  CLEAR_LOG: handleClearLog,
 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
