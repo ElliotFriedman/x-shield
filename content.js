@@ -408,6 +408,26 @@
   }
 
   // ---------------------------------------------------------------
+  // Hide "For you" tab — only show the "Following" tab
+  // ---------------------------------------------------------------
+  function hideForYouTab() {
+    const tabs = document.querySelectorAll('[role="tab"]');
+    for (const tab of tabs) {
+      if (tab.textContent.trim() === 'For you') {
+        // Walk up to the direct child of the tablist and hide it
+        let node = tab;
+        while (node && node.parentElement) {
+          if (node.parentElement.getAttribute('role') === 'tablist') {
+            node.style.display = 'none';
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------
   // Process a newly observed tweet article
   // ---------------------------------------------------------------
   function processTweet(article) {
@@ -468,12 +488,17 @@
   function setupObserver() {
     observer = new MutationObserver((mutations) => {
       if (observerPaused) return;
+      let checkTabs = false;
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
           scanForTweets(node);
+          if (!checkTabs && (node.querySelector?.('[role="tablist"]') || node.getAttribute?.('role') === 'tablist')) {
+            checkTabs = true;
+          }
         }
       }
+      if (checkTabs) hideForYouTab();
     });
 
     observer.observe(document.body, {
@@ -518,6 +543,8 @@
       const currentUrl = location.href;
       if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
+        // Hide "For you" tab on every navigation
+        hideForYouTab();
         // Clear batch queue on navigation — observer stays active
         // as it watches document.body with subtree:true
         if (batchTimer) {
@@ -592,16 +619,19 @@
       return;
     }
 
-    // 3. Start time tracking heartbeat
+    // 3. Hide "For you" tab
+    hideForYouTab();
+
+    // 4. Start time tracking heartbeat
     startHeartbeat();
 
-    // 4. Set up SPA navigation handling
+    // 5. Set up SPA navigation handling
     setupNavigationWatcher();
 
-    // 5. Set up MutationObserver
+    // 6. Set up MutationObserver
     setupObserver();
 
-    // 6. Process any tweets already in the DOM
+    // 7. Process any tweets already in the DOM
     scanForTweets(document.body);
   }
 
