@@ -3,72 +3,11 @@
 
 const http = require('http');
 const { spawn } = require('child_process');
-const { readFileSync } = require('fs');
-const { join } = require('path');
 const CLASSIFICATION_SYSTEM_PROMPT = require('./system-prompt.js');
 
 const HOST = '127.0.0.1';
 const PORT = 7890;
 const POOL_SIZE = 3;
-const DEBUG = process.env.DEBUG === 'true';
-const HISTORY_MAX = 200;
-
-// -------------------------------------------------------------------
-// Debug: classification history + SSE clients
-// -------------------------------------------------------------------
-const classificationHistory = [];
-const sseClients = new Set();
-
-// Send SSE heartbeat every 30s to detect dead connections
-setInterval(() => {
-  for (const client of sseClients) {
-    try {
-      client.write(':heartbeat\n\n');
-    } catch (e) {
-      sseClients.delete(client);
-    }
-  }
-}, 30000);
-
-function recordClassification(tweets, verdicts) {
-  const timestamp = new Date().toISOString();
-  for (let i = 0; i < verdicts.length; i++) {
-    const tweet = tweets[i] || {};
-    const entry = {
-      timestamp,
-      tweetId: tweet.id || `unknown_${i}`,
-      url: tweet.url || null,
-      text: tweet.text || '',
-      verdict: verdicts[i].verdict,
-      reason: verdicts[i].reason || '',
-      distilled: verdicts[i].distilled || null,
-    };
-    classificationHistory.push(entry);
-    if (classificationHistory.length > HISTORY_MAX) {
-      classificationHistory.shift();
-    }
-
-    // Push to SSE clients
-    for (const client of sseClients) {
-      client.write(`data: ${JSON.stringify(entry)}\n\n`);
-    }
-  }
-
-  if (DEBUG) {
-    const COLORS = { nourish: '\x1b[36m', show: '\x1b[32m', filter: '\x1b[31m', distill: '\x1b[35m' };
-    const RESET = '\x1b[0m';
-    for (const v of verdicts) {
-      const tweet = tweets.find((t, j) => `tweet_${j}` === v.id) || {};
-      const color = COLORS[v.verdict] || '';
-      const text = (tweet.text || '').replace(/\n/g, ' ').slice(0, 120);
-      console.log(`${color}[${v.verdict.toUpperCase()}]${RESET} ${text}${tweet.text && tweet.text.length > 120 ? '...' : ''}`);
-      console.log(`         reason: ${v.reason || 'none'}`);
-      if (v.distilled) {
-        console.log(`         distilled: ${v.distilled.slice(0, 120)}`);
-      }
-    }
-  }
-}
 
 // -------------------------------------------------------------------
 // CLI args for spawning claude processes
@@ -239,8 +178,6 @@ function readBody(req) {
   });
 }
 
-const DEBUG_DASHBOARD_HTML = readFileSync(join(__dirname, 'debug-dashboard.html'), 'utf-8');
-
 // -------------------------------------------------------------------
 // CORS headers
 // -------------------------------------------------------------------
@@ -268,43 +205,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Debug dashboard
-  if (req.method === 'GET' && req.url === '/debug') {
-    res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'text/html' });
-    res.end(DEBUG_DASHBOARD_HTML);
-    return;
-  }
-
-  // Debug SSE event stream
-  if (req.method === 'GET' && req.url === '/debug/events') {
-    res.writeHead(200, {
-      ...CORS_HEADERS,
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
-    req.on('error', () => sseClients.delete(res));
-    // Send initial heartbeat to confirm connection
-    res.write(':connected\n\n');
-    return;
-  }
-
-  // Debug API — classification history with summary stats
-  if (req.method === 'GET' && req.url === '/debug/api') {
-    const stats = { total: 0, nourish: 0, show: 0, filter: 0, distill: 0 };
-    for (const entry of classificationHistory) {
-      stats.total++;
-      if (stats.hasOwnProperty(entry.verdict)) {
-        stats[entry.verdict]++;
-      }
-    }
-    res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ stats, history: classificationHistory }));
-    return;
-  }
-
   // Classification endpoint
   if (req.method === 'POST' && req.url === '/classify') {
     try {
@@ -327,8 +227,6 @@ const server = http.createServer(async (req, res) => {
 
       const verdicts = await classifyWithClaude(userPrompt);
 
-      recordClassification(tweets, verdicts);
-
       res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ verdicts }));
     } catch (e) {
@@ -346,8 +244,4 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[X-Shield Server] Listening on http://${HOST}:${PORT}`);
-  console.log(`[X-Shield Server] Debug dashboard: http://${HOST}:${PORT}/debug`);
-  if (DEBUG) {
-    console.log('[X-Shield Server] DEBUG mode enabled — verbose classification logging to terminal');
-  }
 });
