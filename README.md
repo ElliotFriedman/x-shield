@@ -64,7 +64,7 @@ X-Shield uses a **fail-closed** design — tweets are hidden by default and only
 1. A tweet appears in your feed or notifications
 2. X-Shield immediately hides it (you never see unclassified content)
 3. The tweet text is sent to Claude for classification
-4. Claude evaluates whether the tweet is genuinely enriching or just engagement bait
+4. Claude classifies it into one of four verdicts: **nourish** (actively beneficial), **show** (genuine content), **distill** (real info wrapped in manipulation — rewritten neutrally), or **filter** (pure manipulation, scams, zero-value)
 5. Approved tweets fade in. Everything else stays hidden.
 
 If anything goes wrong — server down, API error, malformed response — tweets stay hidden. The system never fails open.
