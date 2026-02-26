@@ -659,6 +659,66 @@ async function handleExportLog() {
   }
 }
 
+async function handleGetLogHistory(message) {
+  await flushLogBuffer();
+  try {
+    const db = await logDBReady;
+    const verdictFilter = message.verdict || null;
+    const limit = message.limit || 200;
+    const offset = message.offset || 0;
+
+    return new Promise((resolve) => {
+      const tx = db.transaction('classifications', 'readonly');
+      const store = tx.objectStore('classifications');
+
+      // Count stats across all entries
+      const stats = { total: 0, nourish: 0, allow: 0, block: 0, distill: 0 };
+      const countReq = store.openCursor();
+      countReq.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          stats.total++;
+          const v = cursor.value.verdict;
+          if (stats.hasOwnProperty(v)) stats[v]++;
+          cursor.continue();
+        } else {
+          // Now fetch paginated entries (newest first)
+          const entries = [];
+          const index = store.index('timestamp');
+          let skipped = 0;
+          const cursorReq = index.openCursor(null, 'prev');
+          cursorReq.onsuccess = (e2) => {
+            const c = e2.target.result;
+            if (c) {
+              if (verdictFilter && c.value.verdict !== verdictFilter) {
+                c.continue();
+                return;
+              }
+              if (skipped < offset) {
+                skipped++;
+                c.continue();
+                return;
+              }
+              if (entries.length < limit) {
+                entries.push(c.value);
+                c.continue();
+              } else {
+                resolve({ entries, stats });
+              }
+            } else {
+              resolve({ entries, stats });
+            }
+          };
+          cursorReq.onerror = () => resolve({ entries: [], stats });
+        }
+      };
+      countReq.onerror = () => resolve({ entries: [], stats: { total: 0, nourish: 0, allow: 0, block: 0, distill: 0 } });
+    });
+  } catch (e) {
+    return { entries: [], stats: { total: 0, nourish: 0, allow: 0, block: 0, distill: 0 } };
+  }
+}
+
 async function handleClearLog() {
   logBuffer = [];
   try {
@@ -690,6 +750,7 @@ const MESSAGE_HANDLERS = {
   GET_LOG_COUNT: handleGetLogCount,
   EXPORT_LOG: handleExportLog,
   CLEAR_LOG: handleClearLog,
+  GET_LOG_HISTORY: handleGetLogHistory,
 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

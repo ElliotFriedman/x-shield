@@ -24,6 +24,7 @@ const els = {
   btnLogOn: document.getElementById('btn-log-on'),
   logControls: document.getElementById('log-controls'),
   logCountText: document.getElementById('log-count-text'),
+  btnViewLog: document.getElementById('btn-view-log'),
   btnExportLog: document.getElementById('btn-export-log'),
   btnClearLog: document.getElementById('btn-clear-log'),
 };
@@ -293,6 +294,9 @@ function bindEvents() {
   els.btnResetStats.addEventListener('click', resetStats);
   els.btnLogOff.addEventListener('click', () => toggleLogging(false));
   els.btnLogOn.addEventListener('click', () => toggleLogging(true));
+  els.btnViewLog.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('log.html') });
+  });
   els.btnExportLog.addEventListener('click', exportLog);
   els.btnClearLog.addEventListener('click', clearLog);
 }

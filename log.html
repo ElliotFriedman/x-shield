@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>X-Shield — Tweet Log</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  background: #0a0a0f;
+  color: #c8c8d0;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 0; border-bottom: 1px solid #1e1e2e; margin-bottom: 20px;
+  flex-wrap: wrap; gap: 12px;
+}
+header h1 { font-size: 18px; font-weight: 600; color: #e0e0e8; letter-spacing: 0.5px; }
+header h1 span { color: #666; font-weight: 400; }
+.btn-clear {
+  background: #1e1e2e; color: #c8c8d0; border: 1px solid #2e2e3e;
+  padding: 6px 16px; border-radius: 6px; font-family: inherit; font-size: 12px;
+  cursor: pointer; transition: background 0.2s, border-color 0.2s;
+}
+.btn-clear:hover { background: #2e2e3e; border-color: #3e3e4e; }
+.btn-clear.danger { color: #ef4444; border-color: #5c2020; }
+.btn-clear.danger:hover { background: rgba(239,68,68,0.1); border-color: #ef4444; }
+.stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.stat-card {
+  background: #12121a; border: 1px solid #1e1e2e; border-radius: 8px;
+  padding: 14px 20px; min-width: 130px; flex: 1;
+  cursor: pointer; transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+.stat-card:hover { background: #1a1a24; }
+.stats.filtered .stat-card { opacity: 0.45; }
+.stats.filtered .stat-card.active { opacity: 1; }
+.stat-card.active { border-color: #555; }
+.stat-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 4px; }
+.stat-card .value { font-size: 24px; font-weight: 700; }
+.stat-card.total .value { color: #e0e0e8; }
+.stat-card.nourish .value { color: #22d3ee; }
+.stat-card.allow .value { color: #22c55e; }
+.stat-card.block .value { color: #ef4444; }
+.stat-card.distill .value { color: #a855f7; }
+.stat-card.nourish { border-top: 2px solid #22d3ee; }
+.stat-card.allow { border-top: 2px solid #22c55e; }
+.stat-card.block { border-top: 2px solid #ef4444; }
+.stat-card.distill { border-top: 2px solid #a855f7; }
+.table-wrapper { background: #12121a; border: 1px solid #1e1e2e; border-radius: 8px; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; padding: 12px 16px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; color: #666; background: #0e0e16; border-bottom: 1px solid #1e1e2e;
+  position: sticky; top: 0; z-index: 1;
+}
+tbody tr { border-bottom: 1px solid #1a1a28; transition: background 0.15s; }
+tbody tr:hover { background: #161620; }
+tbody tr:last-child { border-bottom: none; }
+tbody td { padding: 10px 16px; font-size: 13px; vertical-align: top; }
+td.time { white-space: nowrap; color: #888; width: 140px; }
+td.verdict-cell { width: 90px; }
+.badge {
+  display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 11px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.badge.nourish { background: rgba(34,211,238,0.12); color: #22d3ee; border: 1px solid rgba(34,211,238,0.25); }
+.badge.allow { background: rgba(34,197,94,0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.25); }
+.badge.block { background: rgba(239,68,68,0.12); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); }
+.badge.distill { background: rgba(168,85,247,0.12); color: #a855f7; border: 1px solid rgba(168,85,247,0.25); }
+td.tweet-text { max-width: 500px; word-break: break-word; }
+.tweet-content { cursor: pointer; position: relative; }
+.tweet-content.truncated::after { content: ' ... (click to expand)'; color: #555; font-style: italic; font-size: 11px; }
+.tweet-content.expanded { white-space: pre-wrap; }
+td.reason { color: #999; max-width: 300px; word-break: break-word; }
+td.distilled-cell { color: #a855f7; max-width: 300px; word-break: break-word; font-style: italic; }
+tbody tr.filter-hidden { display: none; }
+.filter-indicator {
+  font-size: 12px; color: #888; margin-bottom: 12px; display: none; align-items: center; gap: 8px;
+}
+.filter-indicator.visible { display: flex; }
+.filter-indicator .filter-label { color: #aaa; }
+.filter-indicator .btn-clear-filter {
+  background: none; border: 1px solid #2e2e3e; color: #888; padding: 2px 10px;
+  border-radius: 4px; font-family: inherit; font-size: 11px; cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.filter-indicator .btn-clear-filter:hover { background: #1e1e2e; color: #c8c8d0; }
+.empty-state { text-align: center; padding: 60px 20px; color: #444; }
+.empty-state .icon { font-size: 32px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+.new-row { animation: fadeIn 0.4s ease; }
+@keyframes fadeIn { from { opacity: 0; background: rgba(34,197,94,0.06); } to { opacity: 1; background: transparent; } }
+@media (max-width: 900px) {
+  .container { padding: 12px; }
+  .stats { gap: 8px; }
+  .stat-card { min-width: 100px; padding: 10px 14px; }
+  .stat-card .value { font-size: 20px; }
+  thead th, tbody td { padding: 8px 10px; font-size: 12px; }
+  td.tweet-text { max-width: 250px; }
+  td.reason, td.distilled-cell { max-width: 180px; }
+}
+@media (max-width: 600px) {
+  .stats { flex-direction: column; }
+  .stat-card { min-width: unset; }
+  .table-wrapper { overflow-x: auto; }
+  table { min-width: 700px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>X-Shield <span>Tweet Log</span></h1>
+    <button class="btn-clear danger" id="btn-clear">Clear Log</button>
+  </header>
+  <div class="stats" id="stats-container">
+    <div class="stat-card total"><div class="label">Total</div><div class="value" id="stat-total">0</div></div>
+    <div class="stat-card nourish"><div class="label">Nourish</div><div class="value" id="stat-nourish">0</div></div>
+    <div class="stat-card allow"><div class="label">Show</div><div class="value" id="stat-allow">0</div></div>
+    <div class="stat-card block"><div class="label">Filter</div><div class="value" id="stat-block">0</div></div>
+    <div class="stat-card distill"><div class="label">Distill</div><div class="value" id="stat-distill">0</div></div>
+  </div>
+  <div class="filter-indicator" id="filter-indicator">
+    <span class="filter-label">Showing: <strong id="filter-name"></strong></span>
+    <button class="btn-clear-filter" id="btn-clear-filter">Show All</button>
+  </div>
+  <div class="table-wrapper">
+    <table>
+      <thead><tr><th>Time</th><th>Link</th><th>Verdict</th><th>Tweet Text</th><th>Reason</th><th>Distilled</th></tr></thead>
+      <tbody id="table-body">
+        <tr class="empty-state" id="empty-row">
+          <td colspan="6"><div class="icon">&#x229B;</div><p>No classifications logged yet.</p></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+(function() {
+  'use strict';
+
+  var tbody = document.getElementById('table-body');
+  var emptyRow = document.getElementById('empty-row');
+  var statsContainer = document.getElementById('stats-container');
+  var filterIndicator = document.getElementById('filter-indicator');
+  var filterName = document.getElementById('filter-name');
+  var activeFilter = null;
+  var latestTimestamp = 0;
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function formatTime(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    var month = String(d.getMonth() + 1).padStart(2, '0');
+    var day = String(d.getDate()).padStart(2, '0');
+    var time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    return month + '/' + day + ' ' + time;
+  }
+
+  // Map internal verdict names to display labels
+  var verdictLabels = { nourish: 'nourish', allow: 'show', block: 'filter', distill: 'distill' };
+
+  function updateStats(stats) {
+    document.getElementById('stat-total').textContent = stats.total || 0;
+    document.getElementById('stat-nourish').textContent = stats.nourish || 0;
+    document.getElementById('stat-allow').textContent = stats.allow || 0;
+    document.getElementById('stat-block').textContent = stats.block || 0;
+    document.getElementById('stat-distill').textContent = stats.distill || 0;
+  }
+
+  function createRow(entry, animate) {
+    var tr = document.createElement('tr');
+    if (animate) tr.className = 'new-row';
+    var verdict = (entry.verdict || 'block').toLowerCase();
+    tr.setAttribute('data-verdict', verdict);
+    if (activeFilter && verdict !== activeFilter) tr.classList.add('filter-hidden');
+
+    var text = entry.tweetText || '';
+    var reason = entry.reason || '';
+    var distilled = entry.distilled || '';
+    var time = formatTime(entry.timestamp);
+    var truncated = text.length > 200;
+    var displayText = truncated ? text.substring(0, 200) : text;
+    var displayLabel = verdictLabels[verdict] || verdict;
+    var url = entry.tweetUrl || '';
+
+    tr.innerHTML =
+      '<td class="time">' + escapeHtml(time) + '</td>' +
+      '<td class="link-cell">' + (url ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" style="color:#4a9eff;text-decoration:none" title="Open tweet">&#x2197;</a>' : '') + '</td>' +
+      '<td class="verdict-cell"><span class="badge ' + escapeHtml(verdict) + '">' + escapeHtml(displayLabel) + '</span></td>' +
+      '<td class="tweet-text"><div class="tweet-content' + (truncated ? ' truncated' : '') + '">' + escapeHtml(displayText) + '</div></td>' +
+      '<td class="reason">' + escapeHtml(reason) + '</td>' +
+      '<td class="distilled-cell">' + escapeHtml(distilled) + '</td>';
+
+    if (truncated) {
+      var div = tr.querySelector('.tweet-content');
+      var expanded = false;
+      div.addEventListener('click', function() {
+        expanded = !expanded;
+        this.textContent = expanded ? text : displayText;
+        this.className = 'tweet-content' + (expanded ? ' expanded' : ' truncated');
+      });
+    }
+    return tr;
+  }
+
+  function loadHistory(verdict) {
+    var msg = { type: 'GET_LOG_HISTORY', limit: 500 };
+    if (verdict) msg.verdict = verdict;
+
+    chrome.runtime.sendMessage(msg, function(response) {
+      if (chrome.runtime.lastError || !response) return;
+
+      updateStats(response.stats || {});
+
+      // Clear table
+      tbody.innerHTML = '';
+      emptyRow = null;
+
+      var entries = response.entries || [];
+      if (entries.length === 0) {
+        emptyRow = document.createElement('tr');
+        emptyRow.className = 'empty-state';
+        emptyRow.id = 'empty-row';
+        emptyRow.innerHTML = '<td colspan="6"><div class="icon">&#x229B;</div><p>No classifications logged yet.</p></td>';
+        tbody.appendChild(emptyRow);
+        latestTimestamp = 0;
+        return;
+      }
+
+      for (var i = 0; i < entries.length; i++) {
+        var row = createRow(entries[i], false);
+        tbody.appendChild(row);
+      }
+
+      // Track newest timestamp for polling
+      latestTimestamp = entries[0].timestamp || 0;
+    });
+  }
+
+  // Polling for new entries
+  function pollForUpdates() {
+    var msg = { type: 'GET_LOG_HISTORY', limit: 50 };
+    if (activeFilter) msg.verdict = activeFilter;
+
+    chrome.runtime.sendMessage(msg, function(response) {
+      if (chrome.runtime.lastError || !response) return;
+
+      updateStats(response.stats || {});
+
+      var entries = response.entries || [];
+      if (entries.length === 0) return;
+
+      var newestTs = entries[0].timestamp || 0;
+      if (newestTs <= latestTimestamp) return;
+
+      // Insert new entries at top
+      var newEntries = [];
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].timestamp > latestTimestamp) {
+          newEntries.push(entries[i]);
+        } else {
+          break;
+        }
+      }
+
+      if (newEntries.length > 0) {
+        if (emptyRow && emptyRow.parentNode) {
+          emptyRow.parentNode.removeChild(emptyRow);
+          emptyRow = null;
+        }
+        // Insert newest first at top of table
+        for (var j = newEntries.length - 1; j >= 0; j--) {
+          var row = createRow(newEntries[j], true);
+          if (tbody.firstChild) {
+            tbody.insertBefore(row, tbody.firstChild);
+          } else {
+            tbody.appendChild(row);
+          }
+        }
+        latestTimestamp = newestTs;
+      }
+    });
+  }
+
+  // Verdict filtering via stat cards
+  function setFilter(verdict) {
+    if (activeFilter === verdict) verdict = null;
+    activeFilter = verdict;
+
+    var cards = document.querySelectorAll('.stat-card');
+    if (verdict) {
+      statsContainer.classList.add('filtered');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.toggle('active', cards[i].classList.contains(verdict));
+      }
+      filterIndicator.classList.add('visible');
+      filterName.textContent = verdictLabels[verdict] || verdict;
+    } else {
+      statsContainer.classList.remove('filtered');
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].classList.remove('active');
+      }
+      filterIndicator.classList.remove('visible');
+    }
+
+    // Reload with filter applied server-side
+    loadHistory(verdict);
+  }
+
+  document.querySelectorAll('.stat-card').forEach(function(card) {
+    card.addEventListener('click', function() {
+      var classes = this.className.split(' ');
+      var verdict = null;
+      var verdicts = ['nourish', 'allow', 'block', 'distill'];
+      for (var i = 0; i < classes.length; i++) {
+        if (verdicts.indexOf(classes[i]) !== -1) { verdict = classes[i]; break; }
+      }
+      if (this.classList.contains('total')) {
+        setFilter(null);
+      } else if (verdict) {
+        setFilter(verdict);
+      }
+    });
+  });
+
+  document.getElementById('btn-clear-filter').addEventListener('click', function() {
+    setFilter(null);
+  });
+
+  // Clear log
+  document.getElementById('btn-clear').addEventListener('click', function() {
+    if (!confirm('Clear all logged classifications? This cannot be undone.')) return;
+    chrome.runtime.sendMessage({ type: 'CLEAR_LOG' }, function() {
+      if (chrome.runtime.lastError) return;
+      tbody.innerHTML = '';
+      emptyRow = document.createElement('tr');
+      emptyRow.className = 'empty-state';
+      emptyRow.id = 'empty-row';
+      emptyRow.innerHTML = '<td colspan="6"><div class="icon">&#x229B;</div><p>Log cleared.</p></td>';
+      tbody.appendChild(emptyRow);
+      latestTimestamp = 0;
+      updateStats({ total: 0, nourish: 0, allow: 0, block: 0, distill: 0 });
+    });
+  });
+
+  // Initial load
+  loadHistory(null);
+
+  // Poll every 10 seconds
+  setInterval(pollForUpdates, 10000);
+})();
+</script>
+</body>
+</html>
