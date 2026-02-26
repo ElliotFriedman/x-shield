@@ -20,6 +20,7 @@
 
   const VERDICT_PRIORITY = { nourish: 0, allow: 1, distill: 2, block: 3, pending: 4 };
   const TWEET_SELECTOR = 'article[data-testid="tweet"]';
+  const CELL_SELECTOR = '[data-testid="cellInnerDiv"]';
   const X_SHIELD_CLASSES = ['x-shield-pending', 'x-shield-approved', 'x-shield-filtered', 'x-shield-distilled', 'x-shield-nourished', 'x-shield-unclassified'];
 
   // ---------------------------------------------------------------
@@ -122,10 +123,14 @@
   }
 
   function hideAllTweets() {
-    const tweets = document.querySelectorAll(TWEET_SELECTOR);
-    tweets.forEach((tweet) => {
-      if (!X_SHIELD_CLASSES.some(cls => cls !== 'x-shield-pending' && cls !== 'x-shield-unclassified' && tweet.classList.contains(cls))) {
-        tweet.classList.add('x-shield-pending');
+    // Hide standard tweet articles and notification tweet cells
+    const elements = document.querySelectorAll(
+      TWEET_SELECTOR + ', ' + CELL_SELECTOR
+    );
+    elements.forEach((el) => {
+      if (!el.matches(TWEET_SELECTOR) && !el.querySelector('[data-testid="tweetText"]')) return;
+      if (!X_SHIELD_CLASSES.some(cls => cls !== 'x-shield-pending' && cls !== 'x-shield-unclassified' && el.classList.contains(cls))) {
+        el.classList.add('x-shield-pending');
       }
     });
   }
@@ -240,7 +245,9 @@
 
   function findElementByContentHash(hash) {
     if (!hash) return null;
-    const pending = document.querySelectorAll(TWEET_SELECTOR + '.x-shield-pending');
+    const pending = document.querySelectorAll(
+      TWEET_SELECTOR + '.x-shield-pending, ' + CELL_SELECTOR + '.x-shield-pending'
+    );
     for (const candidate of pending) {
       const { text: candidateText } = extractTweetContent(candidate);
       if (contentHash(candidateText) === hash) {
@@ -544,19 +551,38 @@
   }
 
   // ---------------------------------------------------------------
-  // Scan a DOM node (and its subtree) for tweet articles
+  // Notification tweet detection — on /notifications, X renders
+  // tweet content inside plain divs (cellInnerDiv) instead of
+  // article[data-testid="tweet"]. Detect these by checking for
+  // tweetText inside a cellInnerDiv that has no article wrapper.
+  // ---------------------------------------------------------------
+  function isNotificationTweet(cell) {
+    return cell.querySelector('[data-testid="tweetText"]') &&
+           !cell.querySelector(TWEET_SELECTOR);
+  }
+
+  // ---------------------------------------------------------------
+  // Scan a DOM node (and its subtree) for tweet articles and
+  // notification tweet cells
   // ---------------------------------------------------------------
   function scanForTweets(root) {
     if (!root || !root.querySelectorAll) return;
 
-    // Check if the root itself is a tweet
+    // Standard tweet articles (feed, thread, search pages)
     if (root.matches && root.matches(TWEET_SELECTOR)) {
       processTweet(root);
     }
-
-    // Check children
     const articles = root.querySelectorAll(TWEET_SELECTOR);
     articles.forEach(processTweet);
+
+    // Notification tweet cells (no article wrapper)
+    if (root.matches && root.matches(CELL_SELECTOR) && isNotificationTweet(root)) {
+      processTweet(root);
+    }
+    const cells = root.querySelectorAll(CELL_SELECTOR);
+    for (const cell of cells) {
+      if (isNotificationTweet(cell)) processTweet(cell);
+    }
   }
 
   // ---------------------------------------------------------------
@@ -630,15 +656,15 @@
         }
         batchQueue = [];
 
-        // Strip x-shield classes from existing tweets so recycled DOM
-        // elements get re-classified on the new page
-        const tweets = document.querySelectorAll(
-          X_SHIELD_CLASSES.map(cls => TWEET_SELECTOR + '.' + cls).join(',')
-        );
-        tweets.forEach((tweet) => {
-          tweet.classList.remove(...X_SHIELD_CLASSES);
-          // Remove distilled labels on navigation
-          const label = tweet.querySelector('.x-shield-distilled-label');
+        // Strip x-shield classes from existing tweets and notification
+        // cells so recycled DOM elements get re-classified on the new page
+        const shieldedSelector = X_SHIELD_CLASSES.map(cls =>
+          TWEET_SELECTOR + '.' + cls + ', ' + CELL_SELECTOR + '.' + cls
+        ).join(', ');
+        const shielded = document.querySelectorAll(shieldedSelector);
+        shielded.forEach((el) => {
+          el.classList.remove(...X_SHIELD_CLASSES);
+          const label = el.querySelector('.x-shield-distilled-label');
           if (label) label.remove();
         });
 

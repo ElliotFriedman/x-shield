@@ -61,7 +61,7 @@ If you don't have a Claude Max subscription, you can use an Anthropic API key in
 
 X-Shield uses a **fail-closed** design — tweets are hidden by default and only shown after AI classification approves them.
 
-1. A tweet appears in your feed
+1. A tweet appears in your feed or notifications
 2. X-Shield immediately hides it (you never see unclassified content)
 3. The tweet text is sent to Claude for classification
 4. Claude evaluates whether the tweet is genuinely enriching or just engagement bait
@@ -83,6 +83,7 @@ Classification is based on **intent and delivery**, not topic. Negative news rep
 ## Features
 
 - **AI classification** — Every tweet evaluated by Claude for emotional manipulation, rage bait, engagement farming, and low-value content
+- **Notifications filtering** — Scam mentions, phishing, and spam in your notifications tab are classified and hidden just like feed content
 - **Fail-closed design** — If anything goes wrong, tweets stay hidden rather than slipping through
 - **Daily time limit** — Configurable timer (default 15 minutes). Once reached, all X tabs close and access is blocked until the next day
 - **Dual classification modes** — Claude Code (free via CLI) or API Key (pay-per-use) — switch anytime from the popup
