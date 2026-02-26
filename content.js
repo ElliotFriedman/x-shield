@@ -683,9 +683,65 @@
   }
 
   // ---------------------------------------------------------------
+  // Notification suppression — strip (N) from tab title and lock
+  // the favicon to prevent badged icons from triggering compulsive
+  // checking.
+  // ---------------------------------------------------------------
+  function setupNotificationSuppression() {
+    // --- Title: strip "(N) " prefix ---
+    function cleanTitle() {
+      const cleaned = document.title.replace(/^\(\d+\+?\)\s*/, '');
+      if (cleaned !== document.title) {
+        document.title = cleaned;
+      }
+    }
+
+    cleanTitle();
+
+    const titleEl = document.querySelector('title');
+    if (titleEl) {
+      new MutationObserver(cleanTitle).observe(titleEl, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    }
+
+    // --- Favicon: lock to the plain X icon ---
+    // Capture the initial clean favicon, then prevent X from swapping
+    // in a badged version by reverting any changes.
+    const existingIcon = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
+    const cleanHref = existingIcon ? existingIcon.href : null;
+
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeName === 'LINK' && /icon/i.test(node.rel || '')) {
+            if (cleanHref && node.href !== cleanHref) {
+              node.href = cleanHref;
+            }
+          }
+        }
+      }
+    }).observe(document.head, { childList: true });
+
+    // Also catch attribute mutations on existing icon links
+    if (existingIcon) {
+      new MutationObserver(() => {
+        if (cleanHref && existingIcon.href !== cleanHref) {
+          existingIcon.href = cleanHref;
+        }
+      }).observe(existingIcon, { attributes: true, attributeFilter: ['href'] });
+    }
+  }
+
+  // ---------------------------------------------------------------
   // Initialization
   // ---------------------------------------------------------------
   async function init() {
+    // 0. Suppress notification counts in tab title and favicon
+    setupNotificationSuppression();
+
     // 1. Check lockout status
     const lockoutResponse = await sendMessage({ type: 'CHECK_LOCKOUT' });
     if (lockoutResponse && lockoutResponse.locked === true) {
