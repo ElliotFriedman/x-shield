@@ -708,31 +708,42 @@
     }
 
     // --- Favicon: lock to the plain X icon ---
-    // Capture the initial clean favicon, then prevent X from swapping
-    // in a badged version by reverting any changes.
-    const existingIcon = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
-    const cleanHref = existingIcon ? existingIcon.href : null;
+    // Use a known-clean favicon rather than capturing from the DOM.
+    // By the time this content script runs (document_idle), X may have
+    // already swapped in a notification-badged favicon. Capturing the
+    // current href would lock in the badge — the opposite of our intent.
+    const CLEAN_FAVICON = 'https://abs.twimg.com/favicons/twitter.3.ico';
+    let suppressing = false;
 
+    function lockFavicon(linkEl) {
+      if (suppressing || !linkEl) return;
+      if (linkEl.href !== CLEAN_FAVICON) {
+        suppressing = true;
+        linkEl.href = CLEAN_FAVICON;
+        suppressing = false;
+      }
+    }
+
+    function watchIconLink(linkEl) {
+      lockFavicon(linkEl);
+      new MutationObserver(() => lockFavicon(linkEl))
+        .observe(linkEl, { attributes: true, attributeFilter: ['href'] });
+    }
+
+    // Lock all existing icon links
+    document.querySelectorAll('link[rel~="icon"], link[rel="shortcut icon"]')
+      .forEach(watchIconLink);
+
+    // Watch for new icon links added to <head> (React re-renders, SPA nav)
     new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
-          if (node.nodeName === 'LINK' && /icon/i.test(node.rel || '')) {
-            if (cleanHref && node.href !== cleanHref) {
-              node.href = cleanHref;
-            }
+          if (node.nodeName === 'LINK' && /\bicon\b/i.test(node.rel || '')) {
+            watchIconLink(node);
           }
         }
       }
     }).observe(document.head, { childList: true });
-
-    // Also catch attribute mutations on existing icon links
-    if (existingIcon) {
-      new MutationObserver(() => {
-        if (cleanHref && existingIcon.href !== cleanHref) {
-          existingIcon.href = cleanHref;
-        }
-      }).observe(existingIcon, { attributes: true, attributeFilter: ['href'] });
-    }
   }
 
   // ---------------------------------------------------------------
