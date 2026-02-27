@@ -18,7 +18,6 @@ const CLAUDE_ARGS = [
   '--output-format', 'json',
   '--model', 'sonnet',
   '--no-session-persistence',
-  '--tools', '',
 ];
 
 // -------------------------------------------------------------------
@@ -45,6 +44,12 @@ class ProcessPool {
     });
 
     const entry = { proc, alive: true };
+
+    // Wait for the CLI to finish initializing before marking ready.
+    // Without this, stdin data can arrive during arg parsing and get
+    // misinterpreted as CLI options (defense-in-depth alongside the
+    // [tweet_N] delimiter which avoids flag-like prefixes).
+    entry.ready = new Promise(resolve => setTimeout(resolve, 1500));
 
     proc.on('error', (err) => {
       console.error('[X-Shield Server] Warm process error:', err.message);
@@ -113,10 +118,15 @@ function parseClaudeOutput(raw) {
 // -------------------------------------------------------------------
 // Classify using a warm claude process from the pool
 // -------------------------------------------------------------------
-function classifyWithClaude(userPrompt) {
-  return new Promise((resolve, reject) => {
-    const { proc } = pool.acquire();
+async function classifyWithClaude(userPrompt) {
+  const entry = pool.acquire();
 
+  // Wait for the CLI to finish initializing before writing to stdin
+  await entry.ready;
+
+  const { proc } = entry;
+
+  return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
 
@@ -219,7 +229,7 @@ const server = http.createServer(async (req, res) => {
 
       // Build user prompt from tweets
       const parts = tweets.map((t, i) =>
-        `--- tweet_${i} (id: ${t.id}) ---\n${t.text || '[no text]'}`
+        `[tweet_${i}]\n${t.text || '[no text]'}`
       );
       const userPrompt = parts.join('\n\n');
 

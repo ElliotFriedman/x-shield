@@ -375,7 +375,7 @@ async function classifyBatchAPI(tweets, apiKey) {
   console.log(`[X-Shield] Classifying batch of ${tweets.length} tweets via Anthropic API`);
 
   const userPrompt = tweets.map((t, i) =>
-    `--- tweet_${i} (id: ${t.id}) ---\n${t.text || '[no text]'}`
+    `[tweet_${i}]\n${t.text || '[no text]'}`
   ).join('\n\n');
 
   const result = await fetchWithRetry(

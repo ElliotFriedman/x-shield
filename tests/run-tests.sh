@@ -152,7 +152,7 @@ Quote: $QUOTE_TEXT"
   fi
 
   # Wrap in the server.js batch format
-  echo "--- tweet_0 (id: test) ---
+  echo "[tweet_0]
 $text"
 }
 
