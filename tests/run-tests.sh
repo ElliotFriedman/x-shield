@@ -8,6 +8,8 @@
 #   ./tests/run-tests.sh              # run all fixtures
 #   ./tests/run-tests.sh filter       # run only filter/ fixtures
 #   ./tests/run-tests.sh show distill # run show/ and distill/ fixtures
+#   ./tests/run-tests.sh -v           # verbose mode (show parsed tweets, raw output)
+#   ./tests/run-tests.sh -v filter    # verbose + category filter
 #
 # Each fixture is a .md file in tests/fixtures/{show,distill,filter,nourish}/ with:
 #   # Tweet
@@ -42,14 +44,52 @@ FAILED=0
 ERRORS=0
 TOTAL=0
 
+# Verbose mode: -v or --verbose flag
+VERBOSE=false
+CATEGORIES=()
+for arg in "$@"; do
+  case "$arg" in
+    -v|--verbose) VERBOSE=true ;;
+    *) CATEGORIES+=("$arg") ;;
+  esac
+done
+
+# Default categories if none specified
+if [ ${#CATEGORIES[@]} -eq 0 ]; then
+  CATEGORIES=(show distill filter nourish)
+fi
+
 # ---------------------------------------------------------------------------
-# Step 1: Extract the system prompt from server.js
+# Step 1: Pre-flight checks
 # ---------------------------------------------------------------------------
 echo -e "${BOLD}X-Shield Classification Test Harness${RESET}"
 echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
 
-echo -e "${DIM}Extracting system prompt from server.js...${RESET}"
+# Check for required commands
+CLAUDE_PATH="$(command -v claude 2>/dev/null || true)"
+if [ -z "$CLAUDE_PATH" ]; then
+  echo -e "${RED}ERROR: 'claude' command not found on PATH${RESET}"
+  echo -e "${DIM}  PATH: $PATH${RESET}"
+  echo ""
+  echo -e "  Install Claude Code: ${CYAN}npm install -g @anthropic-ai/claude-code${RESET}"
+  echo -e "  Or if using nvm, make sure it's initialized in your shell."
+  exit 1
+fi
+
+NODE_PATH="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE_PATH" ]; then
+  echo -e "${RED}ERROR: 'node' command not found on PATH${RESET}"
+  exit 1
+fi
+
+echo -e "${DIM}  claude: $CLAUDE_PATH${RESET}"
+echo -e "${DIM}  node:   $NODE_PATH${RESET}"
+
+# ---------------------------------------------------------------------------
+# Step 2: Extract the system prompt from server.js
+# ---------------------------------------------------------------------------
+echo -e "${DIM}  Extracting system prompt from server.js...${RESET}"
 SYSTEM_PROMPT="$(node "$SCRIPT_DIR/extract-prompt.js")"
 
 if [ -z "$SYSTEM_PROMPT" ]; then
@@ -59,16 +99,10 @@ fi
 
 PROMPT_LINES=$(echo "$SYSTEM_PROMPT" | wc -l | tr -d ' ')
 echo -e "${DIM}  System prompt extracted (${PROMPT_LINES} lines)${RESET}"
-echo ""
-
-# ---------------------------------------------------------------------------
-# Step 2: Determine which categories to test
-# ---------------------------------------------------------------------------
-if [ $# -gt 0 ]; then
-  CATEGORIES=("$@")
-else
-  CATEGORIES=(show distill filter nourish)
+if $VERBOSE; then
+  echo -e "${DIM}  Verbose mode enabled${RESET}"
 fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # Step 3: Parse a fixture file
@@ -164,7 +198,12 @@ $text"
 classify_tweet() {
   local formatted_tweet="$1"
   local raw_output
+  local stderr_output
   local exit_code=0
+
+  # Temp file for stderr so we can capture both streams
+  local stderr_file
+  stderr_file=$(mktemp)
 
   # Call claude CLI with the same args server.js uses
   # Unset CLAUDECODE to allow running inside a Claude Code session
@@ -175,11 +214,25 @@ classify_tweet() {
     --model sonnet \
     --no-session-persistence \
     --tools "" \
-    2>/dev/null) || exit_code=$?
+    2>"$stderr_file") || exit_code=$?
+
+  stderr_output=$(<"$stderr_file")
+  rm -f "$stderr_file"
 
   if [ $exit_code -ne 0 ]; then
-    echo "ERROR:claude exited with code $exit_code"
+    local err_detail="claude exited with code $exit_code"
+    if [ -n "$stderr_output" ]; then
+      err_detail="$err_detail — $stderr_output"
+    fi
+    echo "ERROR	$err_detail"
     return
+  fi
+
+  if $VERBOSE; then
+    echo "DEBUG:raw_output=$raw_output" >&2
+    if [ -n "$stderr_output" ]; then
+      echo "DEBUG:stderr=$stderr_output" >&2
+    fi
   fi
 
   # --output-format json wraps the result: {"result": "..."}
@@ -206,10 +259,10 @@ classify_tweet() {
           // Output verdict and reason separated by tab
           console.log(verdicts[0].verdict + '\t' + (verdicts[0].reason || ''));
         } else {
-          console.log('ERROR\tUnexpected JSON structure: ' + result);
+          console.log('ERROR\tUnexpected JSON structure: ' + result.substring(0, 200));
         }
       } catch (e) {
-        console.log('ERROR\tFailed to parse: ' + e.message);
+        console.log('ERROR\tFailed to parse: ' + e.message + ' — raw: ' + input.substring(0, 200));
       }
     });
   " 2>/dev/null)
@@ -257,6 +310,11 @@ for category in "${CATEGORIES[@]}"; do
     formatted="$(format_tweet)"
 
     # Classify
+    if $VERBOSE; then
+      echo -e "  ${DIM}--- $fixture_name ---${RESET}"
+      echo -e "  ${DIM}  Expected: $EXPECTED${RESET}"
+      echo -e "  ${DIM}  Tweet: ${TWEET_TEXT:0:80}...${RESET}"
+    fi
     echo -ne "  ${DIM}...${RESET}   $fixture_name"
 
     result="$(classify_tweet "$formatted")"
@@ -270,7 +328,7 @@ for category in "${CATEGORIES[@]}"; do
 
     if [[ "$actual_verdict" == ERROR* ]]; then
       echo -e "  ${YELLOW}ERR ${RESET}  $fixture_name"
-      echo -e "         ${DIM}Error: ${actual_reason}${RESET}"
+      echo -e "         ${DIM}${actual_reason}${RESET}"
       ERRORS=$((ERRORS + 1))
     elif [ "$actual_verdict" = "$EXPECTED" ]; then
       echo -e "  ${GREEN}PASS${RESET}  $fixture_name"
